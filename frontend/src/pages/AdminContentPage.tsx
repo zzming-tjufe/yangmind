@@ -1,0 +1,310 @@
+import { useEffect, useMemo, useState } from "react";
+import { ApiError } from "../api/client";
+import {
+  getAdminContentBlocks,
+  getAdminExperiments,
+  patchAdminContentBlock,
+  patchScene,
+  type AdminContentBlock,
+  type AdminScene,
+} from "../api/admin";
+import { useToast } from "../context/ToastContext";
+
+type Tab = "blocks" | "scenes";
+
+const BLOCK_LABELS: Record<string, string> = {
+  "bfi.intro": "BFI 理论导读",
+  "bfi.survey_hero": "BFI 作答页导语",
+  "games.lobby": "博弈大厅",
+  "rank.hero": "排行榜导语",
+  "announcement.banner": "平台公告",
+};
+
+export function AdminContentPage() {
+  const { toast } = useToast();
+  const [tab, setTab] = useState<Tab>("blocks");
+  const [blocks, setBlocks] = useState<AdminContentBlock[]>([]);
+  const [scenes, setScenes] = useState<AdminScene[]>([]);
+  const [editBlock, setEditBlock] = useState<AdminContentBlock | null>(null);
+  const [editScene, setEditScene] = useState<AdminScene | null>(null);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [sceneForm, setSceneForm] = useState({
+    title: "",
+    short_desc: "",
+    option_a: "",
+    option_b: "",
+    option_a_text: "",
+    option_b_text: "",
+  });
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    const [b, exps] = await Promise.all([getAdminContentBlocks(), getAdminExperiments()]);
+    setBlocks(b);
+    setScenes(exps.flatMap((e) => e.scenes));
+  }
+
+  useEffect(() => {
+    load().catch((e) => toast(e instanceof ApiError ? e.message : "加载失败"));
+  }, [toast]);
+
+  const sortedBlocks = useMemo(
+    () => [...blocks].sort((a, b) => a.block_key.localeCompare(b.block_key)),
+    [blocks],
+  );
+
+  function openBlock(b: AdminContentBlock) {
+    setEditBlock(b);
+    setTitle(b.title);
+    setBody(b.body);
+  }
+
+  function openScene(s: AdminScene) {
+    setEditScene(s);
+    setSceneForm({
+      title: s.title,
+      short_desc: s.short_desc,
+      option_a: s.option_a,
+      option_b: s.option_b,
+      option_a_text: s.option_a_text,
+      option_b_text: s.option_b_text,
+    });
+  }
+
+  async function saveBlock() {
+    if (!editBlock) return;
+    setBusy(true);
+    try {
+      await patchAdminContentBlock(editBlock.id, { title, body });
+      setEditBlock(null);
+      await load();
+      toast("内容已保存");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveScene() {
+    if (!editScene) return;
+    setBusy(true);
+    try {
+      await patchScene(editScene.id, sceneForm);
+      setEditScene(null);
+      await load();
+      toast("场景文案已保存");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="page">
+      <section className="hero card">
+        <div>
+          <div className="eyebrow">CONTENT CMS</div>
+          <h2>内容管理</h2>
+          <p>编辑问卷说明、大厅文案、公告，以及博弈场景的标题与选项说明。</p>
+        </div>
+      </section>
+
+      <div className="cms-tabs">
+        <button
+          type="button"
+          className={tab === "blocks" ? "active" : ""}
+          onClick={() => setTab("blocks")}
+        >
+          平台文案
+        </button>
+        <button
+          type="button"
+          className={tab === "scenes" ? "active" : ""}
+          onClick={() => setTab("scenes")}
+        >
+          场景文案
+        </button>
+      </div>
+
+      {tab === "blocks" && (
+        <section className="card">
+          <div className="tablehead">
+            <h3>内容块</h3>
+            <span style={{ fontSize: 12, color: "#999" }}>修改后参与端立即生效</span>
+          </div>
+          <div className="manage-list">
+            {sortedBlocks.map((b) => (
+              <div className="manage-item" key={b.id}>
+                <i>✦</i>
+                <div>
+                  <b>{BLOCK_LABELS[b.block_key] || b.block_key}</b>
+                  <small>
+                    {b.block_key} · v{b.version} · {b.title || "无标题"}
+                  </small>
+                </div>
+                <span className="badge">{b.body.trim() ? "有内容" : "空"}</span>
+                <div className="actions">
+                  <button type="button" onClick={() => openBlock(b)}>
+                    编辑
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tab === "scenes" && (
+        <section className="card">
+          <div className="tablehead">
+            <h3>实验场景</h3>
+          </div>
+          <div className="manage-list">
+            {scenes.map((s) => (
+              <div className="manage-item" key={s.id}>
+                <i>{s.no}</i>
+                <div>
+                  <b>{s.title}</b>
+                  <small>
+                    {s.scene_key} · {s.short_desc.slice(0, 48)}
+                    {s.short_desc.length > 48 ? "…" : ""}
+                  </small>
+                </div>
+                <span className={`badge ${s.enabled ? "" : "warn"}`}>
+                  {s.enabled ? "启用" : "停用"}
+                </span>
+                <div className="actions">
+                  <button type="button" onClick={() => openScene(s)}>
+                    编辑文案
+                  </button>
+                </div>
+              </div>
+            ))}
+            {scenes.length === 0 && <div className="manage-item">暂无场景</div>}
+          </div>
+        </section>
+      )}
+
+      {editBlock && (
+        <div className="profile-overlay" onClick={() => setEditBlock(null)}>
+          <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="profile-modal-head">
+              <div className="profile-person">
+                <i>✦</i>
+                <div>
+                  <b>{BLOCK_LABELS[editBlock.block_key] || editBlock.block_key}</b>
+                  <small>{editBlock.block_key}</small>
+                </div>
+              </div>
+              <button type="button" onClick={() => setEditBlock(null)}>
+                ×
+              </button>
+            </div>
+            <div className="cms-form">
+              <label className="field">
+                标题
+                <input value={title} onChange={(e) => setTitle(e.target.value)} />
+              </label>
+              <label className="field">
+                正文
+                <textarea
+                  rows={8}
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="支持多行。公告留空则不展示横幅。"
+                />
+              </label>
+              <div className="cms-form-actions">
+                <button className="secondary" type="button" onClick={() => setEditBlock(null)}>
+                  取消
+                </button>
+                <button className="primary" type="button" disabled={busy} onClick={saveBlock}>
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editScene && (
+        <div className="profile-overlay" onClick={() => setEditScene(null)}>
+          <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="profile-modal-head">
+              <div className="profile-person">
+                <i>{editScene.no}</i>
+                <div>
+                  <b>场景文案</b>
+                  <small>{editScene.scene_key}</small>
+                </div>
+              </div>
+              <button type="button" onClick={() => setEditScene(null)}>
+                ×
+              </button>
+            </div>
+            <div className="cms-form">
+              <label className="field">
+                标题
+                <input
+                  value={sceneForm.title}
+                  onChange={(e) => setSceneForm((f) => ({ ...f, title: e.target.value }))}
+                />
+              </label>
+              <label className="field">
+                简介
+                <textarea
+                  rows={3}
+                  value={sceneForm.short_desc}
+                  onChange={(e) => setSceneForm((f) => ({ ...f, short_desc: e.target.value }))}
+                />
+              </label>
+              <div className="cms-option-grid">
+                <label className="field">
+                  选项 A 名称
+                  <input
+                    value={sceneForm.option_a}
+                    onChange={(e) => setSceneForm((f) => ({ ...f, option_a: e.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  选项 B 名称
+                  <input
+                    value={sceneForm.option_b}
+                    onChange={(e) => setSceneForm((f) => ({ ...f, option_b: e.target.value }))}
+                  />
+                </label>
+              </div>
+              <label className="field">
+                选项 A 说明
+                <textarea
+                  rows={3}
+                  value={sceneForm.option_a_text}
+                  onChange={(e) => setSceneForm((f) => ({ ...f, option_a_text: e.target.value }))}
+                />
+              </label>
+              <label className="field">
+                选项 B 说明
+                <textarea
+                  rows={3}
+                  value={sceneForm.option_b_text}
+                  onChange={(e) => setSceneForm((f) => ({ ...f, option_b_text: e.target.value }))}
+                />
+              </label>
+              <div className="cms-form-actions">
+                <button className="secondary" type="button" onClick={() => setEditScene(null)}>
+                  取消
+                </button>
+                <button className="primary" type="button" disabled={busy} onClick={saveScene}>
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
