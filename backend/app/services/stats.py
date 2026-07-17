@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -6,18 +8,34 @@ from app.models.survey import PersonalityScore, SurveyResponse
 from app.models.user import User
 
 
-def user_game_stats(db: Session, user_id: int) -> tuple[int, int]:
-    """返回 (总得分, 已完成场次)。"""
+def current_week_start_utc() -> datetime:
+    """本周周一 00:00 UTC（ISO 周）。"""
+    now = datetime.now(UTC)
+    start = now - timedelta(days=now.weekday())
+    return start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def user_game_stats(
+    db: Session,
+    user_id: int,
+    *,
+    since: datetime | None = None,
+) -> tuple[int, int]:
+    """返回 (总得分, 已完成场次)。since 不为空时只统计该时间之后结束的对局。"""
+    filters = [
+        GameSession.user_id == user_id,
+        GameSession.status == "finished",
+    ]
+    if since is not None:
+        end_time = func.coalesce(GameSession.finished_at, GameSession.started_at)
+        filters.append(end_time >= since)
+
     total = (
         db.query(func.coalesce(func.sum(GameSession.my_score), 0))
-        .filter(GameSession.user_id == user_id, GameSession.status == "finished")
+        .filter(*filters)
         .scalar()
     )
-    count = (
-        db.query(func.count(GameSession.id))
-        .filter(GameSession.user_id == user_id, GameSession.status == "finished")
-        .scalar()
-    )
+    count = db.query(func.count(GameSession.id)).filter(*filters).scalar()
     return int(total or 0), int(count or 0)
 
 
@@ -39,7 +57,8 @@ def survey_status_for_user(db: Session, user_id: int) -> str:
     return "已完成" if submitted else "未完成"
 
 
-def build_leaderboard_rows(db: Session) -> list[dict]:
+def build_leaderboard_rows(db: Session, period: str = "all") -> list[dict]:
+    since = current_week_start_utc() if period == "weekly" else None
     users = (
         db.query(User)
         .filter(User.role == "participant", User.status == "active")
@@ -47,7 +66,9 @@ def build_leaderboard_rows(db: Session) -> list[dict]:
     )
     rows = []
     for u in users:
-        total, sessions = user_game_stats(db, u.id)
+        total, sessions = user_game_stats(db, u.id, since=since)
+        if period == "weekly" and sessions == 0:
+            continue
         personality = latest_personality(db, u.id)
         rows.append(
             {

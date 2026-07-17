@@ -113,7 +113,8 @@ def list_stag_scenes(
 ):
     """场景列表 + 个人完成进度。"""
     experiment = _get_stag_experiment(db)
-    unlocked = _survey_submitted(db, current_user.id) and experiment.status == "active"
+    survey_done = _survey_submitted(db, current_user.id)
+    unlocked = survey_done and experiment.status == "active"
     best = _finished_scene_keys(db, current_user.id, experiment.id)
     scenes_sorted = sorted(
         [s for s in experiment.scenes if s.enabled],
@@ -129,6 +130,8 @@ def list_stag_scenes(
         title=experiment.title,
         rounds_per_scene=experiment.rounds_per_scene,
         unlock_games=unlocked,
+        survey_done=survey_done,
+        experiment_status=experiment.status,
         done_count=done,
         required_count=required,
         all_done=all_done,
@@ -168,16 +171,6 @@ def start_session(
     scene = next((s for s in experiment.scenes if s.scene_key == scene_key and s.enabled), None)
     if scene is None:
         raise HTTPException(status_code=404, detail="场景不存在")
-
-    best = _finished_scene_keys(db, current_user.id, experiment.id)
-    required_scenes = [s for s in experiment.scenes if s.enabled and s.required]
-    all_done = all(s.id in best for s in required_scenes)
-    # 与前端一致：某一场景已完成、但整体未完成时，不能重复该场景
-    if scene.id in best and not all_done:
-        raise HTTPException(
-            status_code=400,
-            detail="该场景已完成，请先完成另一个必做场景",
-        )
 
     # 若有进行中的同场景对局，直接返回（避免重复开很多局）
     playing = (

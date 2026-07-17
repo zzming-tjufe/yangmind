@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
@@ -51,17 +52,25 @@ def _get_or_create_draft(db: Session, user: User, instrument: SurveyInstrument) 
     if submitted:
         raise HTTPException(status_code=400, detail="你已提交过 BFI-44，不能再修改答案")
 
-    draft = (
+    drafts = (
         db.query(SurveyResponse)
         .filter(
             SurveyResponse.user_id == user.id,
             SurveyResponse.instrument_id == instrument.id,
             SurveyResponse.status == "in_progress",
         )
-        .first()
+        .order_by(SurveyResponse.id.asc())
+        .all()
     )
-    if draft:
-        return draft
+    if drafts:
+        keep = drafts[-1]
+        for extra in drafts[:-1]:
+            db.query(SurveyAnswer).filter(SurveyAnswer.response_id == extra.id).delete()
+            db.delete(extra)
+        if len(drafts) > 1:
+            db.commit()
+            db.refresh(keep)
+        return keep
 
     draft = SurveyResponse(
         user_id=user.id,
@@ -70,7 +79,24 @@ def _get_or_create_draft(db: Session, user: User, instrument: SurveyInstrument) 
         status="in_progress",
     )
     db.add(draft)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(SurveyResponse)
+            .filter(
+                SurveyResponse.user_id == user.id,
+                SurveyResponse.instrument_id == instrument.id,
+            )
+            .order_by(SurveyResponse.id.desc())
+            .first()
+        )
+        if existing is None:
+            raise
+        if existing.status == "submitted":
+            raise HTTPException(status_code=400, detail="你已提交过 BFI-44，不能再修改答案")
+        return existing
     db.refresh(draft)
     return draft
 
@@ -107,6 +133,7 @@ def my_response(
 ):
     """查看我的问卷进度或已提交结果。"""
     instrument = _get_instrument(db)
+    # 优先已提交结果，避免并发草稿盖住已提交记录
     response = (
         db.query(SurveyResponse)
         .options(
@@ -116,10 +143,25 @@ def my_response(
         .filter(
             SurveyResponse.user_id == current_user.id,
             SurveyResponse.instrument_id == instrument.id,
+            SurveyResponse.status == "submitted",
         )
         .order_by(SurveyResponse.id.desc())
         .first()
     )
+    if response is None:
+        response = (
+            db.query(SurveyResponse)
+            .options(
+                joinedload(SurveyResponse.answers),
+                joinedload(SurveyResponse.personality_score),
+            )
+            .filter(
+                SurveyResponse.user_id == current_user.id,
+                SurveyResponse.instrument_id == instrument.id,
+            )
+            .order_by(SurveyResponse.id.desc())
+            .first()
+        )
     if response is None:
         return MyResponseOut(status="none", answered_count=0, unlock_games=False)
 

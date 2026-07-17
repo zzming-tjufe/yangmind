@@ -8,6 +8,53 @@ export class ApiError extends Error {
   }
 }
 
+type ValidationError = {
+  loc?: Array<string | number>;
+  msg?: string;
+  type?: string;
+};
+
+const fieldNames: Record<string, string> = {
+  email: "邮箱",
+  password: "密码",
+  nickname: "昵称",
+  invite_code: "邀请码",
+};
+
+function validationMessage(error: ValidationError): string {
+  const field = error.loc?.at(-1);
+  const fieldName =
+    typeof field === "string" ? fieldNames[field] || field : "提交内容";
+  const type = error.type || "";
+
+  if (field === "email" || type.includes("email")) {
+    return "邮箱格式不正确，请输入类似 name@example.com 的地址";
+  }
+  if (type === "missing") return `请输入${fieldName}`;
+  if (type.includes("too_short") || type.includes("min_length")) {
+    return field === "password" ? "密码至少需要 6 个字符" : `${fieldName}内容太短`;
+  }
+  if (type.includes("too_long") || type.includes("max_length")) {
+    return `${fieldName}内容太长`;
+  }
+  return error.msg ? `${fieldName}：${error.msg}` : `${fieldName}填写不正确`;
+}
+
+function errorMessage(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object" || !("detail" in data)) return fallback;
+  const detail = (data as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    return (
+      detail
+        .filter((item): item is ValidationError => Boolean(item && typeof item === "object"))
+        .map(validationMessage)
+        .join("；") || fallback
+    );
+  }
+  return fallback;
+}
+
 function getToken(): string | null {
   return localStorage.getItem("ym_token");
 }
@@ -36,7 +83,7 @@ export async function api<T>(
     let detail = res.statusText;
     try {
       const data = await res.json();
-      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      detail = errorMessage(data, detail);
     } catch {
       /* ignore */
     }

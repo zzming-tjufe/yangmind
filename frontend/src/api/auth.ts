@@ -31,3 +31,10 @@ export function login(body: { email: string; password: string }) {
 export function me() {
   return api<User>("/api/v1/auth/me");
 }
+
+export function changePassword(body: { current_password: string; new_password: string }) {
+  return api<{ ok: boolean }>("/api/v1/auth/change-password", {
+    method: "POST",
+    json: body,
+  });
+}

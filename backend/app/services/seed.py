@@ -16,6 +16,9 @@ from app.data.stag_hunt_seed import (
 from app.models.cms import ContentBlock, PageConfig
 from app.models.game import Experiment, ExperimentScene
 from app.models.survey import SurveyInstrument, SurveyItem
+from app.models.user import User
+from app.core.config import settings
+from app.core.security import hash_password
 
 
 def seed_bfi44_if_needed(db: Session) -> None:
@@ -100,7 +103,37 @@ def seed_cms_if_needed(db: Session) -> None:
     db.commit()
 
 
+def seed_admin_if_needed(db: Session) -> None:
+    """确保唯一管理员：固定账号，同步密码，并降级其它 admin。"""
+    email = settings.seed_admin_email.lower().strip()
+    admin = db.query(User).filter(User.email == email).first()
+    if admin is None:
+        count = db.query(User).count()
+        admin = User(
+            public_id=f"U-{1001 + count}",
+            email=email,
+            password_hash=hash_password(settings.seed_admin_password),
+            nickname=settings.seed_admin_nickname,
+            role="admin",
+            status="active",
+        )
+        db.add(admin)
+    else:
+        admin.role = "admin"
+        admin.status = "active"
+        admin.nickname = settings.seed_admin_nickname
+        admin.password_hash = hash_password(settings.seed_admin_password)
+
+    # 其它账号一律不能是管理员
+    others = db.query(User).filter(User.role == "admin", User.email != email).all()
+    for u in others:
+        u.role = "participant"
+
+    db.commit()
+
+
 def seed_all(db: Session) -> None:
     seed_bfi44_if_needed(db)
     seed_stag_hunt_if_needed(db)
     seed_cms_if_needed(db)
+    seed_admin_if_needed(db)

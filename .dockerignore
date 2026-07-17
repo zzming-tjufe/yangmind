@@ -1,0 +1,14 @@
+.git
+.gitignore
+frontend
+docs
+*.md
+!Dockerfile
+backend/.venv
+backend/**/__pycache__
+backend/.env
+backend/yangmind.db
+backend/**/*.pyc
+node_modules
+.cursor
+agent-transcripts

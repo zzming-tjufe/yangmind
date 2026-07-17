@@ -12,12 +12,12 @@ router = APIRouter(prefix="/api/v1", tags=["leaderboard"])
 
 @router.get("/leaderboard", response_model=LeaderboardOut)
 def leaderboard(
-    period: str = Query(default="all", description="目前仅支持 all；weekly 预留"),
+    period: str = Query(default="weekly", pattern="^(all|weekly)$"),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """排行榜：按已完成对局累计得分排序。"""
-    rows = build_leaderboard_rows(db)
+    """排行榜：weekly=本周已完成对局；all=历史累计。"""
+    rows = build_leaderboard_rows(db, period=period)
     items = [
         LeaderboardEntry(
             rank=r["rank"],

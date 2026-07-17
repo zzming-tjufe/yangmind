@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: yangmind-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: yangmind
+      POSTGRES_PASSWORD: yangmind
+      POSTGRES_DB: yangmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - yangmind_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yangmind -d yangmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  yangmind_pgdata:

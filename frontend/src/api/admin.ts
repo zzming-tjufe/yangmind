@@ -9,8 +9,10 @@ export type LeaderboardEntry = {
   total_score: number;
 };
 
-export function getLeaderboard() {
-  return api<{ period: string; items: LeaderboardEntry[] }>("/api/v1/leaderboard");
+export function getLeaderboard(period: "all" | "weekly" = "weekly") {
+  return api<{ period: string; items: LeaderboardEntry[] }>(
+    `/api/v1/leaderboard?period=${period}`,
+  );
 }
 
 export type AdminStats = {

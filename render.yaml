@@ -1,0 +1,39 @@
+# Render Blueprint：一键创建 Web Service + PostgreSQL
+# 用法：Render Dashboard → New → Blueprint → 选本仓库
+# 文档：docs/DEPLOY_PUBLIC_API.md
+
+databases:
+  - name: yangmind-db
+    plan: free
+    databaseName: yangmind
+    user: yangmind
+
+services:
+  - type: web
+    name: yangmind-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: yangmind-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        # Pages 前端 origin；部署后若仓库名/域名不同请改
+        value: https://zzming-tjufe.github.io,http://127.0.0.1:5173,http://localhost:5173
+      - key: SEED_ADMIN_EMAIL
+        value: admin@yangmind.cn
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_ADMIN_LOGIN
+        value: admin
+      - key: SEED_ADMIN_NICKNAME
+        value: 管理员

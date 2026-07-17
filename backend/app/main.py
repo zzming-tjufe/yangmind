@@ -11,8 +11,11 @@ from app.models import User  # noqa: F401
 from app.models import admin_extra as _admin_extra_models  # noqa: F401
 from app.models import cms as _cms_models  # noqa: F401
 from app.models import game as _game_models  # noqa: F401
+from app.models import match as _match_models  # noqa: F401
 from app.models import survey as _survey_models  # noqa: F401
+from app.api.pvp import router as pvp_router
 from app.api.site import router as site_router
+from app.core.config import settings
 from app.services.seed import seed_all
 
 app = FastAPI(
@@ -21,13 +24,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# 允许 Vite 开发服务器跨域访问 API
+# 允许前端跨域访问 API（本地 + 公网域名，见 CORS_ORIGINS）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,10 +36,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
-    """启动时建表，并写入题库 / 实验种子数据。"""
+    """启动时校验密钥、建表、修补旧库，并写入题库 / 实验种子数据。"""
+    settings.validate_security()
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
+        from app.services.db_fixes import (
+            cleanup_duplicate_survey_responses,
+            ensure_survey_response_unique_index,
+        )
+
+        cleanup_duplicate_survey_responses(db)
+        ensure_survey_response_unique_index(engine)
         seed_all(db)
     finally:
         db.close()
@@ -48,6 +56,7 @@ def on_startup():
 app.include_router(auth_router)
 app.include_router(survey_router)
 app.include_router(games_router)
+app.include_router(pvp_router)
 app.include_router(leaderboard_router)
 app.include_router(site_router)
 app.include_router(admin_router)

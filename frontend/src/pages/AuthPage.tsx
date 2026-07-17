@@ -3,6 +3,8 @@ import { ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export function AuthPage() {
   const { login, register } = useAuth();
   const { toast } = useToast();
@@ -23,12 +25,22 @@ export function AuthPage() {
   }
 
   async function submit(nextMode: "login" | "register") {
-    if (!email.trim()) {
-      toast("请输入邮箱");
+    const account = email.trim();
+    if (!account) {
+      toast(nextMode === "login" ? "请输入账号或邮箱" : "请输入邮箱");
+      return;
+    }
+    const isAdminAlias = nextMode === "login" && account.toLowerCase() === "admin";
+    if (!isAdminAlias && !EMAIL_PATTERN.test(account)) {
+      toast("邮箱格式不正确，请输入类似 name@example.com 的地址");
       return;
     }
     if (!password) {
       toast("请输入密码");
+      return;
+    }
+    if (password.length < 6) {
+      toast("密码至少需要 6 个字符");
       return;
     }
     if (nextMode === "register" && !nickname.trim()) {
@@ -37,11 +49,15 @@ export function AuthPage() {
     }
     setBusy(true);
     try {
-      if (nextMode === "login") await login(email.trim(), password);
-      else await register(email.trim(), password, nickname.trim(), inviteCode.trim() || undefined);
+      if (nextMode === "login") await login(account, password);
+      else await register(account, password, nickname.trim(), inviteCode.trim() || undefined);
       toast(nextMode === "login" ? "登录成功" : "注册成功");
     } catch (e) {
-      toast(e instanceof ApiError ? e.message : "请求失败");
+      toast(
+        e instanceof ApiError
+          ? e.message
+          : "无法连接服务器，请确认后端已在 8003 端口运行",
+      );
     } finally {
       setBusy(false);
     }
@@ -90,10 +106,10 @@ export function AuthPage() {
                 </button>
               </div>
               <label className="field">
-                邮箱
+                账号 / 邮箱
                 <input
-                  type="email"
-                  placeholder="请输入邮箱"
+                  type="text"
+                  placeholder="管理员可填 admin，或输入邮箱"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"

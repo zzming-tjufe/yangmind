@@ -4,17 +4,23 @@ import { getLeaderboard, type LeaderboardEntry } from "../api/admin";
 import { useToast } from "../context/ToastContext";
 import { useSiteContent } from "../hooks/useSite";
 
+type Period = "weekly" | "all";
+
 export function RankPage() {
   const { toast } = useToast();
   const { byKey: content } = useSiteContent();
+  const [period, setPeriod] = useState<Period>("weekly");
   const [items, setItems] = useState<LeaderboardEntry[]>([]);
   const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getLeaderboard()
+    setLoading(true);
+    getLeaderboard(period)
       .then((res) => setItems(res.items))
-      .catch((e) => toast(e instanceof ApiError ? e.message : "加载排行榜失败"));
-  }, [toast]);
+      .catch((e) => toast(e instanceof ApiError ? e.message : "加载排行榜失败"))
+      .finally(() => setLoading(false));
+  }, [period, toast]);
 
   const filtered = items.filter(
     (x) => !q || x.nickname.includes(q) || x.public_id.includes(q),
@@ -25,20 +31,42 @@ export function RankPage() {
     <div className="page">
       <section className="hero card">
         <div>
-          <div className="eyebrow">WEEKLY LEADERBOARD</div>
+          <div className="eyebrow">
+            {period === "weekly" ? "WEEKLY LEADERBOARD" : "ALL-TIME LEADERBOARD"}
+          </div>
           <h2>{hero?.title || "合作不只是策略，也是成绩"}</h2>
           <p>
-            {hero?.body ||
-              "排行榜综合累计得分、有效场次与人格摘要（来自真实后端数据）。"}
+            {period === "weekly"
+              ? "本周榜统计本周一以来已完成对局的累计得分（按场次与得分排序）。"
+              : hero?.body ||
+                "总榜统计历史全部已完成对局的累计得分、场次与人格摘要。"}
           </p>
         </div>
         <div className="ring" style={{ ["--p" as string]: "278deg" }}>
           <b>#{filtered[0]?.rank ?? "-"}</b>
         </div>
       </section>
-      <section className="table card" style={{ marginTop: 18 }}>
+
+      <div className="cms-tabs">
+        <button
+          type="button"
+          className={period === "weekly" ? "active" : ""}
+          onClick={() => setPeriod("weekly")}
+        >
+          本周榜
+        </button>
+        <button
+          type="button"
+          className={period === "all" ? "active" : ""}
+          onClick={() => setPeriod("all")}
+        >
+          总榜
+        </button>
+      </div>
+
+      <section className="card">
         <div className="tablehead">
-          <h3>总排行榜</h3>
+          <h3>{period === "weekly" ? "本周排行" : "总排行榜"}</h3>
           <input
             className="search"
             placeholder="搜索参与者"
@@ -46,30 +74,34 @@ export function RankPage() {
             onChange={(e) => setQ(e.target.value)}
           />
         </div>
-        <div className="row header">
+        <div className="row header rank-row">
           <span>参与者</span>
           <span>排名</span>
           <span>场次</span>
           <span>人格摘要</span>
-          <span>总得分</span>
-          <span>趋势</span>
+          <span>{period === "weekly" ? "本周得分" : "总得分"}</span>
         </div>
-        {filtered.map((u) => (
-          <div className="row" key={u.public_id}>
-            <span className="user">
-              <i>{u.nickname.slice(0, 1)}</i>
-              <b>{u.nickname}</b>
-            </span>
-            <b>#{u.rank}</b>
-            <span>{u.sessions_count}</span>
-            <span>{u.personality_summary}</span>
-            <b>{u.total_score}</b>
-            <span style={{ color: "#269c7d" }}>↑</span>
-          </div>
-        ))}
-        {filtered.length === 0 && (
+        {loading && (
           <div className="row" style={{ gridTemplateColumns: "1fr" }}>
-            <span>暂无数据</span>
+            <span>加载中…</span>
+          </div>
+        )}
+        {!loading &&
+          filtered.map((u) => (
+            <div className="row rank-row" key={u.public_id}>
+              <span className="user">
+                <i>{u.nickname.slice(0, 1)}</i>
+                <b>{u.nickname}</b>
+              </span>
+              <b>#{u.rank}</b>
+              <span>{u.sessions_count}</span>
+              <span>{u.personality_summary}</span>
+              <b>{u.total_score}</b>
+            </div>
+          ))}
+        {!loading && filtered.length === 0 && (
+          <div className="row" style={{ gridTemplateColumns: "1fr" }}>
+            <span>{period === "weekly" ? "本周暂无已完成对局" : "暂无数据"}</span>
           </div>
         )}
       </section>

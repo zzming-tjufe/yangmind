@@ -1,11 +1,55 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import * as gamesApi from "../api/games";
-import type { Scene, Session, StagProgress } from "../api/games";
+import type { PvpMatch, Scene, StagProgress } from "../api/games";
 import { useToast } from "../context/ToastContext";
 import { useSiteContent } from "../hooks/useSite";
 
-type Stage = "lobby" | "scenes" | "intro" | "play";
+type Stage = "lobby" | "scenes" | "matching" | "matched" | "pvp";
+
+/** 用服务端 seconds_left 校准，本地平滑跳动，避免每秒整跳。 */
+function useLocalSeconds(secondsLeft: number | null | undefined, syncKey: string) {
+  const [left, setLeft] = useState(secondsLeft ?? 0);
+  const endsAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (secondsLeft == null) {
+      endsAt.current = null;
+      setLeft(0);
+      return;
+    }
+    endsAt.current = Date.now() + secondsLeft * 1000;
+    setLeft(secondsLeft);
+  }, [secondsLeft, syncKey]);
+
+  useEffect(() => {
+    if (endsAt.current == null) return;
+    const tick = () => {
+      if (endsAt.current == null) return;
+      setLeft(Math.max(0, Math.ceil((endsAt.current - Date.now()) / 1000)));
+    };
+    tick();
+    const id = window.setInterval(tick, 200);
+    return () => window.clearInterval(id);
+  }, [syncKey, secondsLeft]);
+
+  return left;
+}
+
+function useElapsedSeconds(active: boolean) {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    if (!active) {
+      setSec(0);
+      return;
+    }
+    setSec(0);
+    const started = Date.now();
+    const id = window.setInterval(() => setSec(Math.floor((Date.now() - started) / 1000)), 500);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return sec;
+}
 
 export function GamesPage() {
   const { toast } = useToast();
@@ -13,9 +57,51 @@ export function GamesPage() {
   const [progress, setProgress] = useState<StagProgress | null>(null);
   const [stage, setStage] = useState<Stage>("lobby");
   const [scene, setScene] = useState<Scene | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [pvp, setPvp] = useState<PvpMatch | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const lastHistLen = useRef(0);
+  const matchFlashTimer = useRef<number | null>(null);
+  const zeroPollKey = useRef("");
+  const matchNotifiedId = useRef<number | null>(null);
+
+  const waitSec = useElapsedSeconds(stage === "matching");
+  const syncKey = pvp ? `${pvp.id}-${pvp.current_round}-${pvp.round_deadline ?? ""}` : "";
+  const secondsLeft = useLocalSeconds(
+    stage === "pvp" && pvp?.status === "playing" ? pvp.seconds_left : null,
+    syncKey,
+  );
+
+  const bindScene = useCallback(
+    (m: PvpMatch, fallback?: Scene | null) => {
+      const fromProgress = progress?.scenes.find((s) => s.scene_key === m.scene_key);
+      if (fromProgress) {
+        setScene(fromProgress);
+        return fromProgress;
+      }
+      if (fallback && fallback.scene_key === m.scene_key) {
+        setScene(fallback);
+        return fallback;
+      }
+      return null;
+    },
+    [progress],
+  );
+
+  const enterMatchedFlash = useCallback(
+    (m: PvpMatch) => {
+      if (matchNotifiedId.current === m.id) {
+        setStage("pvp");
+        return;
+      }
+      matchNotifiedId.current = m.id;
+      setStage("matched");
+      toast(`已匹配到 ${m.opponent_nickname || "对手"}`);
+      if (matchFlashTimer.current) window.clearTimeout(matchFlashTimer.current);
+      matchFlashTimer.current = window.setTimeout(() => setStage("pvp"), 1100);
+    },
+    [toast],
+  );
 
   const reload = useCallback(async () => {
     const data = await gamesApi.getScenes();
@@ -29,46 +115,164 @@ export function GamesPage() {
       .finally(() => setLoading(false));
   }, [reload, toast]);
 
+  useEffect(() => {
+    return () => {
+      if (matchFlashTimer.current) window.clearTimeout(matchFlashTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if ((stage !== "matching" && stage !== "matched" && stage !== "pvp") || !pvp) return;
+    if (pvp.status === "finished" || pvp.status === "cancelled") return;
+
+    const matchId = pvp.id;
+    const timer = window.setInterval(() => {
+      gamesApi
+        .getPvpMatch(matchId)
+        .then((m) => {
+          setPvp(m);
+          bindScene(m);
+          if (m.status === "playing" && (stage === "matching" || stage === "matched")) {
+            if (stage === "matching") enterMatchedFlash(m);
+          }
+          if (m.status === "finished") {
+            reload().catch(() => undefined);
+          }
+        })
+        .catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [stage, pvp?.id, pvp?.status, reload, bindScene, enterMatchedFlash]);
+
+  // 轮次结算 / 超时提示
+  useEffect(() => {
+    if (!pvp || stage !== "pvp") {
+      lastHistLen.current = pvp?.history.length ?? 0;
+      return;
+    }
+    const len = pvp.history.length;
+    if (len > lastHistLen.current) {
+      const latest = pvp.history[len - 1];
+      if (latest?.my_timed_out) toast("本轮超时未选，得 0 分");
+      else if (latest?.opponent_timed_out) toast("对方超时，本轮已按规则结算");
+    }
+    lastHistLen.current = len;
+  }, [pvp, stage, toast]);
+
+  // 倒计时归零时立刻拉一次，尽快触发超时结算
+  useEffect(() => {
+    if (stage !== "pvp" || !pvp || pvp.status !== "playing") return;
+    if (secondsLeft > 0) return;
+    const key = `${pvp.id}-${pvp.current_round}`;
+    if (zeroPollKey.current === key) return;
+    zeroPollKey.current = key;
+    gamesApi
+      .getPvpMatch(pvp.id)
+      .then((m) => {
+        setPvp(m);
+        bindScene(m);
+      })
+      .catch(() => undefined);
+  }, [secondsLeft, stage, pvp, bindScene]);
+
   async function enterStag() {
     if (!progress?.unlock_games) {
-      toast("请先完成 BFI-44 问卷");
+      toast(
+        !progress?.survey_done
+          ? "请先完成 BFI-44 问卷"
+          : progress?.experiment_status !== "active"
+            ? "实验暂未开放"
+            : "当前无法开始",
+      );
       return;
     }
     setStage("scenes");
   }
 
-  async function openScene(s: Scene) {
-    if (s.completed && progress && !progress.all_done) {
-      toast("该场景已完成，请先完成另一个必做场景");
-      return;
-    }
+  async function startPvp(s: Scene) {
     setBusy(true);
+    setScene(s);
+    lastHistLen.current = 0;
+    zeroPollKey.current = "";
+    matchNotifiedId.current = null;
     try {
-      const sess = await gamesApi.startSession(s.scene_key);
-      setScene(s);
-      setSession(sess);
-      setStage(sess.history.length > 0 ? "play" : "intro");
+      const m = await gamesApi.joinPvpQueue(s.scene_key);
+      setPvp(m);
+      bindScene(m, s);
+      if (m.resumed && m.status === "playing") {
+        toast("继续未完成的对局");
+        setStage("pvp");
+        return;
+      }
+      if (m.resumed && m.status === "waiting") {
+        toast("你仍在匹配队列中");
+        setStage("matching");
+        return;
+      }
+      if (m.status === "playing") {
+        enterMatchedFlash(m);
+      } else {
+        setStage("matching");
+      }
     } catch (e) {
-      toast(e instanceof ApiError ? e.message : "开局失败");
+      toast(e instanceof ApiError ? e.message : "匹配失败");
+      setStage("scenes");
     } finally {
       setBusy(false);
     }
   }
 
-  async function play(choice: "A" | "B") {
-    if (!session) return;
+  async function playPvp(choice: "A" | "B") {
+    if (!pvp) return;
+    if (secondsLeft <= 0) {
+      toast("本轮已超时");
+      return;
+    }
     setBusy(true);
     try {
-      const next = await gamesApi.playRound(session.id, choice);
-      setSession(next);
+      const next = await gamesApi.submitPvpChoice(pvp.id, choice, pvp.current_round);
+      setPvp(next);
+      bindScene(next);
       if (next.status === "finished") {
         await reload();
-        toast(next.experiment_all_done ? "两个场景均已完成" : "本场景完成");
+        toast("真人对局已结束");
       }
     } catch (e) {
-      toast(e instanceof ApiError ? e.message : "提交失败");
+      if (e instanceof ApiError && e.status === 409) {
+        toast(e.message);
+        const fresh = await gamesApi.getPvpMatch(pvp.id).catch(() => null);
+        if (fresh) {
+          setPvp(fresh);
+          bindScene(fresh);
+        }
+      } else {
+        toast(e instanceof ApiError ? e.message : "提交失败");
+      }
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function cancelMatching() {
+    try {
+      const res = await gamesApi.cancelPvpQueue();
+      if (res.cancelled) {
+        setPvp(null);
+        setStage("scenes");
+        return;
+      }
+      if (res.status === "playing" && res.match_id) {
+        toast(res.detail || "已匹配成功，无法取消");
+        const m = await gamesApi.getPvpMatch(res.match_id);
+        setPvp(m);
+        bindScene(m);
+        enterMatchedFlash(m);
+        return;
+      }
+      setPvp(null);
+      setStage("scenes");
+    } catch {
+      toast("取消失败");
     }
   }
 
@@ -82,8 +286,20 @@ export function GamesPage() {
           <div className="alert">
             <i>!</i>
             <div>
-              <b>博弈入口暂未解锁</b>
-              <small>完成 BFI-44 问卷后即可进入全部实验。</small>
+              <b>
+                {!progress?.survey_done
+                  ? "博弈入口暂未解锁"
+                  : progress?.experiment_status !== "active"
+                    ? "实验暂未开放"
+                    : "博弈入口暂未解锁"}
+              </b>
+              <small>
+                {!progress?.survey_done
+                  ? "完成 BFI-44 问卷后即可进入全部实验。"
+                  : progress?.experiment_status !== "active"
+                    ? "管理员已关闭本实验，请稍后再试或联系实验组织者。"
+                    : "当前无法开始新对局。"}
+              </small>
             </div>
           </div>
         )}
@@ -123,19 +339,18 @@ export function GamesPage() {
               <div className="forest" />
             </div>
             <div className="gamebody">
-              <span>协调博弈 · 收益依赖</span>
+              <span>协调博弈 · 真人匹配</span>
               <h3>猎鹿博弈</h3>
-              <p>包含「双人小组任务」和「出行安排」两个完整场景。</p>
+              <p>匹配在线参与者同步对局；每轮 15 秒，超时未选本轮得 0 分。</p>
               <div className="stats">
                 <span>
-                  <b>{progress?.done_count ?? 0}/{progress?.required_count ?? 2}</b>
-                  进度
+                  <b>{progress?.rounds_per_scene ?? 10}</b>轮/场
                 </span>
                 <span>
-                  <b>2</b>个场景
+                  <b>真人</b>匹配
                 </span>
                 <span>
-                  <b>10/6/0</b>计分
+                  <b>15</b>秒/轮
                 </span>
               </div>
               <button className="primary" type="button" onClick={enterStag}>
@@ -156,9 +371,12 @@ export function GamesPage() {
         </button>
         <div className="section-head">
           <div>
-            <div className="eyebrow">STAG HUNT · TWO REQUIRED SCENARIOS</div>
-            <h2>完成两个猎鹿博弈场景</h2>
-            <p>两个场景均为必做项目，每个场景需要完整进行 10 轮。</p>
+            <div className="eyebrow">STAG HUNT · PVP</div>
+            <h2>猎鹿博弈 · 真人匹配</h2>
+            <p>
+              选择场景后进入匹配。已完成的场景也可再次匹配；每轮限时 15
+              秒，双方同步出结果。
+            </p>
           </div>
         </div>
         <div className={`completion-banner card ${progress.all_done ? "complete" : ""}`}>
@@ -166,148 +384,141 @@ export function GamesPage() {
             <span>{progress.all_done ? "EXPERIMENT COMPLETE" : "REQUIRED PROGRESS"}</span>
             <b>
               {progress.all_done
-                ? "两个场景均已完成"
+                ? "必做场景均已至少完成一次"
                 : `必做进度：${progress.done_count} / ${progress.required_count}`}
             </b>
-            <small>
-              {progress.all_done
-                ? "猎鹿博弈实验已计为完整完成。"
-                : "只有两个场景分别完成后才计为实验完成。"}
-            </small>
+            <small>完成记录取该场景历史最高分；可随时再次进入匹配。</small>
           </div>
           <strong>
             {progress.done_count}/{progress.required_count}
           </strong>
         </div>
         <div className="scene-grid">
-          {progress.scenes.map((s) => {
-            const blocked = s.completed && !progress.all_done;
-            return (
-              <article
-                key={s.scene_key}
-                className={`scenario-card card ${s.completed ? "completed" : ""}`}
-                data-no={s.no}
+          {progress.scenes.map((s) => (
+            <article
+              key={s.scene_key}
+              className={`scenario-card card ${s.completed ? "completed" : ""}`}
+              data-no={s.no}
+            >
+              <span className="scenario-status">{s.completed ? "✓ 已完成" : "○ 必做场景"}</span>
+              <h3>{s.title}</h3>
+              <p>{s.short_desc}</p>
+              <div className="scenario-meta">
+                <i>{progress.rounds_per_scene} 轮</i>
+                <i>真人同步</i>
+                <i>{s.completed ? `最高 ${s.best_score}` : "A / B"}</i>
+              </div>
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                onClick={() => startPvp(s)}
               >
-                <span className="scenario-status">{s.completed ? "✓ 已完成" : "○ 必做场景"}</span>
-                <h3>{s.title}</h3>
-                <p>{s.short_desc}</p>
-                <div className="scenario-meta">
-                  <i>10 轮</i>
-                  <i>同时选择</i>
-                  <i>{s.completed ? `得分 ${s.best_score}` : "A / B"}</i>
-                </div>
-                <button
-                  className="primary"
-                  type="button"
-                  disabled={blocked || busy}
-                  onClick={() => openScene(s)}
-                >
-                  {blocked
-                    ? "已完成，请继续另一场景"
-                    : s.completed
-                      ? "重新体验该场景 →"
-                      : "查看场景规则 →"}
-                </button>
-              </article>
-            );
-          })}
+                {s.completed ? "再次匹配 →" : "开始匹配 →"}
+              </button>
+            </article>
+          ))}
         </div>
       </div>
     );
   }
 
-  if (stage === "intro" && scene && session) {
+  if (stage === "matching" && pvp) {
+    const spinDeg = ((waitSec % 12) / 12) * 360;
     return (
       <div className="page">
-        <button className="backbtn" type="button" onClick={() => setStage("scenes")}>
-          ← 返回场景选择
-        </button>
-        <section className="hero card">
+        <section className="hero card matchmaking-hero">
           <div>
-            <div className="eyebrow">猎鹿博弈 · 场景 {scene.no}</div>
-            <h2>{scene.title}</h2>
-            <p>{scene.short_desc}每轮你不能提前知道对方的选择。</p>
+            <div className="eyebrow">MATCHMAKING</div>
+            <h2>
+              正在匹配真人对手
+              <span className="match-dots" aria-hidden>
+                <i /><i /><i />
+              </span>
+            </h2>
+            <p>
+              场景：{scene?.title || pvp.scene_title}。请保持页面打开，匹配成功后将自动进入第 1
+              轮（每轮 15 秒）。
+            </p>
+            <div className="match-meta">
+              <span>
+                已等待 <b>{waitSec}</b> 秒
+              </span>
+              <span>同步限时 · 15 秒/轮</span>
+            </div>
           </div>
-          <div className="ring" style={{ ["--p" as string]: "0deg" }}>
-            <b>0/10</b>
+          <div
+            className="ring match-search-ring"
+            style={{ ["--p" as string]: `${spinDeg}deg` }}
+            aria-label="正在搜索对手"
+          >
+            <b>搜</b>
           </div>
         </section>
-        <div className="rule-layout" style={{ marginTop: 18 }}>
-          <section className="rule-copy card">
-            <h3>你的两个选择</h3>
-            <div className="options">
-              <div className="option">
-                <b>A：{scene.option_a}</b>
-                <span>{scene.option_a_text}</span>
-              </div>
-              <div className="option">
-                <b>B：{scene.option_b}</b>
-                <span>{scene.option_b_text}</span>
-              </div>
-            </div>
-          </section>
-          <section className="matrix-card card">
-            <h3>每轮得分规则</h3>
-            <div className="matrix">
-              <div className="matrix-row head">
-                <span>你 / 对方</span>
-                <span>A</span>
-                <span>B</span>
-              </div>
-              <div className="matrix-row">
-                <span>A</span>
-                <span>10 / 10</span>
-                <span>0 / 6</span>
-              </div>
-              <div className="matrix-row">
-                <span>B</span>
-                <span>6 / 0</span>
-                <span>6 / 6</span>
-              </div>
-            </div>
-          </section>
+        <div className="match-pulse-bar" aria-hidden>
+          <i />
         </div>
         <div className="rule-actions">
-          <small>请确认你已了解场景和计分规则。</small>
-          <button className="primary" type="button" onClick={() => setStage("play")}>
-            我已了解，开始第 1 轮 →
+          <small>队列中仅匹配同一场景的在线参与者</small>
+          <button className="secondary" type="button" onClick={() => cancelMatching()}>
+            取消匹配
           </button>
         </div>
       </div>
     );
   }
 
-  if (stage === "play" && scene && session) {
-    if (session.status === "finished") {
+  if (stage === "matched" && pvp) {
+    return (
+      <div className="page">
+        <section className="hero card match-found-hero">
+          <div>
+            <div className="eyebrow">MATCH FOUND</div>
+            <h2>匹配成功</h2>
+            <p>
+              对手 <b>{pvp.opponent_nickname || "参与者"}</b> 已就位，即将开始第 1 轮…
+            </p>
+          </div>
+          <div className="ring match-found-ring" style={{ ["--p" as string]: "360deg" }}>
+            <b>✓</b>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (stage === "pvp" && scene && pvp) {
+    if (pvp.status === "finished") {
       return (
         <div className="page">
           <section className="finish card">
-            <div className="trophy">{session.experiment_all_done ? "✓" : "✦"}</div>
+            <div className="trophy">✦</div>
             <div className="eyebrow" style={{ justifyContent: "center", marginTop: 20 }}>
-              {session.experiment_all_done
-                ? "猎鹿博弈已全部完成"
-                : `场景已完成 · 总进度 ${(progress?.done_count ?? 0)}/${progress?.required_count ?? 2}`}
+              真人匹配对局结束
             </div>
-            <h2>{scene.title} · 10 轮结束</h2>
-            <div className="finish-score">{session.my_score} 分</div>
-            <p>
-              本场对方得分：{session.opponent_score} · 你选择 A：
-              {session.history.filter((h) => h.my_choice === "A").length} 次
-            </p>
+            <h2>
+              {scene.title} · vs {pvp.opponent_nickname || "对手"}
+            </h2>
+            <div className="finish-score">{pvp.my_score} 分</div>
+            <p>对方得分：{pvp.opponent_score}</p>
             <div className="finish-actions">
-              <button className="secondary" type="button" onClick={() => setStage("scenes")}>
-                查看场景进度
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => startPvp(scene)}
+              >
+                再来一局
               </button>
               <button
                 className="primary"
                 type="button"
                 onClick={() => {
-                  const next = progress?.scenes.find((s) => !s.completed);
-                  if (next) openScene(next);
-                  else setStage("scenes");
+                  setPvp(null);
+                  setStage("scenes");
                 }}
               >
-                {session.experiment_all_done ? "返回场景列表" : "继续下一个必做场景 →"}
+                返回场景列表
               </button>
             </div>
           </section>
@@ -315,84 +526,123 @@ export function GamesPage() {
       );
     }
 
-    const history = [...session.history].reverse();
+    const history = [...pvp.history].reverse();
+    const waitingResult = pvp.i_have_chosen && !pvp.opponent_has_chosen;
+    const timeoutSec = pvp.round_timeout_sec || 15;
+    const urgent = secondsLeft <= 5 && !pvp.i_have_chosen;
+    const ringDeg = Math.max(0, Math.min(360, (secondsLeft / timeoutSec) * 360));
+
     return (
       <div className="page">
-        <button
-          className="backbtn"
-          type="button"
-          onClick={async () => {
-            if (session) await gamesApi.abandonSession(session.id).catch(() => undefined);
-            setStage("scenes");
-          }}
-        >
-          ← 退出当前对局
-        </button>
-        <section className="round-card card">
+        <section className={`round-card card ${urgent ? "round-urgent" : ""}`}>
           <div className="roundtop">
             <div>
-              <div className="eyebrow">{scene.title}</div>
-              <h2>现在是第 {session.current_round} 轮</h2>
-              <p>请同时做出决策：你选择 A 还是 B？</p>
+              <div className="eyebrow">真人对战 · {pvp.opponent_nickname || "对手"}</div>
+              <h2>第 {pvp.current_round} 轮</h2>
+              <p>
+                双方同步选择。超时未选本轮得 0 分
+                {pvp.opponent_has_chosen && !pvp.i_have_chosen ? "；对方已提交，正等你选择。" : "。"}
+              </p>
             </div>
-            <div className="roundbadge">
-              第 <b>{session.current_round}</b> / {session.rounds_total} 轮
+            <div
+              className={`ring timer-ring ${urgent ? "urgent" : ""}`}
+              style={{ ["--p" as string]: `${ringDeg}deg` }}
+              aria-live="polite"
+              aria-label={`剩余 ${secondsLeft} 秒`}
+            >
+              <b>{secondsLeft}</b>
+              <small>秒</small>
             </div>
           </div>
+
+          <div
+            className="roundbar"
+            style={{ gridTemplateColumns: `repeat(${pvp.rounds_total}, 1fr)` }}
+          >
+            {Array.from({ length: pvp.rounds_total }, (_, i) => {
+              const n = i + 1;
+              const cls =
+                n < pvp.current_round ? "done" : n === pvp.current_round ? "now" : "";
+              return <i key={n} className={cls} />;
+            })}
+          </div>
+
+          <div className="timer-track" aria-hidden>
+            <i
+              style={{
+                width: `${Math.max(0, Math.min(100, (secondsLeft / timeoutSec) * 100))}%`,
+              }}
+              className={urgent ? "urgent" : ""}
+            />
+          </div>
+
           <div className="scoreboard">
             <div className="scorebox">
               <span>你的累计得分</span>
-              <b>{session.my_score}</b>
+              <b>{pvp.my_score}</b>
             </div>
             <div className="versus">VS</div>
             <div className="scorebox">
-              <span>对方累计得分</span>
-              <b>{session.opponent_score}</b>
+              <span>{pvp.opponent_nickname || "对方"}</span>
+              <b>{pvp.opponent_score}</b>
             </div>
           </div>
-          {session.last_round && (
+
+          {history[0] && (
             <div className="last-result">
-              上一轮：你选择 <b>{session.last_round.my_choice}</b>，对方选择{" "}
-              <b>{session.last_round.opponent_choice}</b>。你得{" "}
-              <b>{session.last_round.my_points}</b> 分，对方得{" "}
-              <b>{session.last_round.opponent_points}</b> 分。
+              上一轮：你 <b>{history[0].my_timed_out ? "超时" : history[0].my_choice}</b>，对方{" "}
+              <b>{history[0].opponent_timed_out ? "超时" : history[0].opponent_choice}</b>
+              。你得 <b>{history[0].my_points}</b>，对方得 <b>{history[0].opponent_points}</b>。
             </div>
           )}
-          <div className="choice-title">请选择本轮行动</div>
-          <div className="choice-buttons">
-            <button className="choice-btn" type="button" disabled={busy} onClick={() => play("A")}>
-              <b>A · {scene.option_a}</b>
-              <span>{scene.option_a_text}</span>
-              <em>双方选 A：10 分</em>
-            </button>
-            <button className="choice-btn" type="button" disabled={busy} onClick={() => play("B")}>
-              <b>B · {scene.option_b}</b>
-              <span>{scene.option_b_text}</span>
-              <em>稳定收益：6 分</em>
-            </button>
-          </div>
+
+          {pvp.i_have_chosen ? (
+            <div className={`choice-title wait-status ${waitingResult ? "pulse" : ""}`}>
+              {waitingResult ? "已提交，等待对方选择或倒计时结束…" : "正在结算本轮…"}
+            </div>
+          ) : (
+            <>
+              <div className="choice-title">
+                {urgent ? "时间将尽，请尽快选择" : "请选择本轮行动"}
+              </div>
+              <div className="choice-buttons">
+                <button
+                  className="choice-btn"
+                  type="button"
+                  disabled={busy || secondsLeft <= 0}
+                  onClick={() => playPvp("A")}
+                >
+                  <b>A · {scene.option_a}</b>
+                  <span>{scene.option_a_text}</span>
+                </button>
+                <button
+                  className="choice-btn"
+                  type="button"
+                  disabled={busy || secondsLeft <= 0}
+                  onClick={() => playPvp("B")}
+                >
+                  <b>B · {scene.option_b}</b>
+                  <span>{scene.option_b_text}</span>
+                </button>
+              </div>
+            </>
+          )}
         </section>
         {history.length > 0 && (
           <section className="history-card card">
-            <div className="history-title">之前轮次的记录</div>
+            <div className="history-title">之前轮次</div>
             <div className="history-row head">
               <span>轮次</span>
-              <span>你的选择</span>
-              <span>对方选择</span>
-              <span>你的得分</span>
+              <span>你</span>
+              <span>对方</span>
+              <span>你得分</span>
               <span>对方得分</span>
             </div>
             {history.map((h) => (
               <div className="history-row" key={h.round_no}>
                 <span>{h.round_no}</span>
-                <span>
-                  <i className={`choice-tag ${h.my_choice === "B" ? "b" : ""}`}>{h.my_choice}</i>
-                </span>
-                <span>
-                  <i className={`choice-tag ${h.opponent_choice === "B" ? "b" : ""}`}>
-                    {h.opponent_choice}
-                  </i>
-                </span>
+                <span>{h.my_timed_out ? "超时" : h.my_choice}</span>
+                <span>{h.opponent_timed_out ? "超时" : h.opponent_choice}</span>
                 <b>+{h.my_points}</b>
                 <b>+{h.opponent_points}</b>
               </div>

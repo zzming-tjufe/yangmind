@@ -5,10 +5,27 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
 
-# SQLite 需要这个参数，否则多线程下容易报错
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 
-engine = create_engine(settings.database_url, connect_args=connect_args)
+def normalize_database_url(url: str) -> str:
+    """统一成 SQLAlchemy 可用的驱动 URL。"""
+    value = (url or "").strip()
+    if value.startswith("postgres://"):
+        return "postgresql+psycopg://" + value[len("postgres://") :]
+    if value.startswith("postgresql://") and "+psycopg" not in value:
+        return "postgresql+psycopg://" + value[len("postgresql://") :]
+    return value
+
+
+DATABASE_URL = normalize_database_url(settings.database_url)
+
+# SQLite 需要这个参数，否则多线程下容易报错
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=connect_args,
+    pool_pre_ping=True,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

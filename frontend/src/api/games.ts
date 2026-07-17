@@ -19,6 +19,8 @@ export type StagProgress = {
   title: string;
   rounds_per_scene: number;
   unlock_games: boolean;
+  survey_done: boolean;
+  experiment_status: string;
   done_count: number;
   required_count: number;
   all_done: boolean;
@@ -66,4 +68,65 @@ export function playRound(sessionId: number, choice: "A" | "B") {
 
 export function abandonSession(sessionId: number) {
   return api<Session>(`/api/v1/sessions/${sessionId}/abandon`, { method: "POST" });
+}
+
+export type PvpRound = {
+  round_no: number;
+  status: string;
+  my_choice: string | null;
+  opponent_choice: string | null;
+  my_points: number | null;
+  opponent_points: number | null;
+  my_timed_out: boolean;
+  opponent_timed_out: boolean;
+};
+
+export type PvpMatch = {
+  id: number;
+  status: string;
+  scene_key: string;
+  scene_title: string;
+  rounds_total: number;
+  current_round: number;
+  round_timeout_sec: number;
+  round_deadline: string | null;
+  seconds_left: number | null;
+  my_score: number;
+  opponent_score: number;
+  opponent_nickname: string | null;
+  my_seat: string;
+  waiting: boolean;
+  resumed?: boolean;
+  i_have_chosen: boolean;
+  opponent_has_chosen: boolean;
+  history: PvpRound[];
+};
+
+export function joinPvpQueue(sceneKey: string) {
+  return api<PvpMatch>(`/api/v1/pvp/stag-hunt/scenes/${sceneKey}/queue`, {
+    method: "POST",
+  });
+}
+
+export function cancelPvpQueue() {
+  return api<{
+    ok: boolean;
+    cancelled: boolean;
+    status?: string | null;
+    match_id?: number | null;
+    detail?: string;
+  }>("/api/v1/pvp/queue/cancel", {
+    method: "POST",
+  });
+}
+
+export function getPvpMatch(matchId: number) {
+  return api<PvpMatch>(`/api/v1/pvp/matches/${matchId}`);
+}
+
+export function submitPvpChoice(matchId: number, choice: "A" | "B", roundNo?: number) {
+  return api<PvpMatch>(`/api/v1/pvp/matches/${matchId}/choice`, {
+    method: "POST",
+    json: { choice, round_no: roundNo },
+  });
 }

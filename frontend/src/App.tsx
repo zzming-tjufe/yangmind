@@ -9,6 +9,7 @@ import { AdminPagesPage } from "./pages/AdminPagesPage";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { BfiPage } from "./pages/BfiPage";
 import { GamesPage } from "./pages/GamesPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { RankPage } from "./pages/RankPage";
 
 export default function App() {
@@ -40,6 +41,9 @@ export default function App() {
       break;
     case "rank":
       content = <RankPage />;
+      break;
+    case "profile":
+      content = <ProfilePage />;
       break;
     case "users":
       content = <AdminUsersPage />;

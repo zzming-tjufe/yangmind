@@ -42,6 +42,9 @@ class SurveyResponse(Base):
     """某用户对某量表的一份答卷。"""
 
     __tablename__ = "survey_responses"
+    __table_args__ = (
+        UniqueConstraint("user_id", "instrument_id", name="uq_user_instrument_response"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
