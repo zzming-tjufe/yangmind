@@ -368,3 +368,55 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
     flex-wrap: wrap;
   }
 }
+
+/* 管理员只读预览用户界面 */
+.preview-switch {
+  flex: 0 0 auto;
+  margin-top: auto;
+  margin-bottom: 14px;
+  border-color: #d9cda9;
+  background: #faf6eb;
+  color: #765918;
+  font-weight: 700;
+}
+.preview-switch:hover {
+  border-color: var(--gold);
+  background: #fffaf0;
+}
+.user-preview-mode .profile { margin-top: 0; }
+.preview-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.preview-status span {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #fff3d6;
+  color: #785b18;
+  font-size: 11px;
+  font-weight: 700;
+}
+.preview-status button {
+  height: 34px;
+  padding: 0 13px;
+  border: 1px solid #d9cda9;
+  border-radius: 9px;
+  background: #fff;
+  color: #765918;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.user-preview-content { position: relative; }
+.user-preview-content button,
+.user-preview-content input,
+.user-preview-content textarea,
+.user-preview-content select {
+  pointer-events: none;
+  cursor: not-allowed !important;
+}
+.user-preview-content button { opacity: 0.62; }
+@media (max-width: 560px) {
+  .preview-status span { display: none; }
+}

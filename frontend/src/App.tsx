@@ -15,11 +15,21 @@ import { RankPage } from "./pages/RankPage";
 export default function App() {
   const { user, loading } = useAuth();
   const [view, setView] = useState<View>("bfi");
+  const [previewingUserUi, setPreviewingUserUi] = useState(false);
 
   useEffect(() => {
     if (!user) return;
+    setPreviewingUserUi(false);
     setView(user.role === "admin" ? "users" : "bfi");
   }, [user]);
+
+  function toggleUserPreview() {
+    if (user?.role !== "admin") return;
+    setPreviewingUserUi((current) => {
+      setView(current ? "users" : "bfi");
+      return !current;
+    });
+  }
 
   if (loading) {
     return (
@@ -63,8 +73,15 @@ export default function App() {
   }
 
   return (
-    <AppShell view={view} onNavigate={setView}>
-      {content}
+    <AppShell
+      view={view}
+      onNavigate={setView}
+      previewingUserUi={previewingUserUi}
+      onToggleUserPreview={toggleUserPreview}
+    >
+      <div className={previewingUserUi ? "user-preview-content" : undefined}>
+        {content}
+      </div>
     </AppShell>
   );
 }

@@ -44,24 +44,33 @@ const fallbackTitles: Record<View, [string, string]> = {
 type Props = {
   view: View;
   onNavigate: (v: View) => void;
+  previewingUserUi?: boolean;
+  onToggleUserPreview?: () => void;
   children: ReactNode;
 };
 
 export type { View };
 
-export function AppShell({ view, onNavigate, children }: Props) {
+export function AppShell({
+  view,
+  onNavigate,
+  previewingUserUi = false,
+  onToggleUserPreview,
+  children,
+}: Props) {
   const { user, logout } = useAuth();
   const isAdmin = user?.role === "admin";
+  const showParticipantUi = !isAdmin || previewingUserUi;
   const { byKey, pages } = useSitePages();
 
-  const items = isAdmin
-    ? adminNav
-    : [...userNavBase.filter((item) => {
+  const items = showParticipantUi
+    ? [...userNavBase.filter((item) => {
         if (item.id === "profile") return true;
         const cfg = byKey[item.id];
         if (!pages.length) return true;
         return cfg?.status === "published";
-      })];
+      })]
+    : adminNav;
 
   const pageCfg = byKey[view];
   const [fallbackTitle, fallbackSub] = fallbackTitles[view];
@@ -69,7 +78,7 @@ export function AppShell({ view, onNavigate, children }: Props) {
   const sub = pageCfg?.subtitle || fallbackSub;
 
   useEffect(() => {
-    if (isAdmin || !pages.length) return;
+    if (!showParticipantUi || !pages.length) return;
     const allowed = new Set(
       pages.filter((p) => p.status === "published").map((p) => p.page_key),
     );
@@ -77,20 +86,20 @@ export function AppShell({ view, onNavigate, children }: Props) {
       const first = userNavBase.find((n) => allowed.has(n.id));
       if (first) onNavigate(first.id);
     }
-  }, [isAdmin, pages, view, onNavigate]);
+  }, [showParticipantUi, pages, view, onNavigate]);
 
   return (
-    <section id="app">
+    <section id="app" className={previewingUserUi ? "user-preview-mode" : undefined}>
       <aside className="sidebar">
         <div className="brand">
           <i>YM</i>
           <strong>YangMind Lab</strong>
         </div>
         <div className="space" id="space-title">
-          {isAdmin ? "管理控制台" : "参与者空间"}
+          {previewingUserUi ? "用户界面预览" : isAdmin ? "管理控制台" : "参与者空间"}
         </div>
         <nav className="nav" id="nav">
-          <small>{isAdmin ? "实验管理" : "实验参与"}</small>
+          <small>{showParticipantUi ? "实验参与" : "实验管理"}</small>
           {items.map((item) => (
             <button
               key={item.id}
@@ -103,6 +112,11 @@ export function AppShell({ view, onNavigate, children }: Props) {
             </button>
           ))}
         </nav>
+        {isAdmin && onToggleUserPreview ? (
+          <button className="switch preview-switch" type="button" onClick={onToggleUserPreview}>
+            {previewingUserUi ? "← 返回管理后台" : "◎ 预览用户界面"}
+          </button>
+        ) : null}
         <div className="profile">
           <div className="avatar" id="avatar">
             {(user?.nickname || "?").slice(0, 1)}
@@ -123,11 +137,19 @@ export function AppShell({ view, onNavigate, children }: Props) {
           <div>
             <div className="crumb">
               YANGMIND LAB <em>/</em>{" "}
-              <span id="crumb-role">{isAdmin ? "管理控制台" : "参与者空间"}</span>
+              <span id="crumb-role">
+                {previewingUserUi ? "用户界面预览" : isAdmin ? "管理控制台" : "参与者空间"}
+              </span>
             </div>
             <h1 id="page-title">{title}</h1>
             <p id="page-sub">{sub}</p>
           </div>
+          {previewingUserUi ? (
+            <div className="preview-status" role="status">
+              <span>只读预览</span>
+              <button type="button" onClick={onToggleUserPreview}>返回管理后台</button>
+            </div>
+          ) : null}
         </header>
         <div className="content" id="content">
           {children}
