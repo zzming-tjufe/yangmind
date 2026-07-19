@@ -70,7 +70,11 @@ export function BfiPage() {
     try {
       const resp = await surveyApi.submitSurvey();
       setMine(resp);
-      toast("问卷已提交，博弈入口已解锁");
+      toast(
+        resp.unlock_games
+          ? "问卷已提交，博弈入口已解锁"
+          : "问卷已提交，但质量检查未通过，博弈入口未解锁",
+      );
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "提交失败");
     } finally {
@@ -93,10 +97,14 @@ export function BfiPage() {
       <div className="page">
         <section className="hero card">
           <div>
-            <div className="eyebrow">已完成 · {mine.quality_passed ? "质量检查通过" : "已提交"}</div>
+            <div className="eyebrow">
+              已完成 · {mine.quality_passed ? "质量检查通过" : "质量检查未通过"}
+            </div>
             <h2>你的人格轮廓已生成</h2>
             <p>
-              {p.summary_label}。结果用于解释博弈中的决策倾向，不代表能力高低。
+              {mine.quality_passed
+                ? `${p.summary_label}。结果用于解释博弈中的决策倾向，不代表能力高低。`
+                : "本次作答未通过质量检查，因此不会解锁博弈实验。如有疑问请联系管理员。"}
             </p>
           </div>
           <div className="ring" style={{ ["--p" as string]: "360deg" }}>

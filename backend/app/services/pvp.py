@@ -175,8 +175,9 @@ def claim_waiting_match(
 
 def _mirror_round_to_sessions(db: Session, match: PvpMatch, rnd: PvpRound) -> None:
     """把本轮写入双方 GameSession，便于排行榜复用。"""
-    choice_a = rnd.choice_a or "B"
-    choice_b = rnd.choice_b or "B"
+    # T means timeout/no choice. Never turn missing experimental data into B.
+    choice_a = rnd.choice_a or "T"
+    choice_b = rnd.choice_b or "T"
     if match.session_a_id:
         sa = db.get(GameSession, match.session_a_id)
         if sa and sa.status == "playing":

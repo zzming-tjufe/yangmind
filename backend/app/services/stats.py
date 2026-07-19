@@ -100,7 +100,7 @@ def admin_overview_stats(db: Session) -> dict:
     valid_rounds = (
         db.query(func.count(GameRound.id))
         .join(GameSession, GameRound.session_id == GameSession.id)
-        .filter(GameSession.status == "finished")
+        .filter(GameSession.status == "finished", GameRound.my_choice.in_(("A", "B")))
         .scalar()
         or 0
     )

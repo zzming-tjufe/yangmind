@@ -51,8 +51,8 @@ def main() -> None:
     a = db.query(User).filter(User.email == "pvp_a@test.cn").first()
     b = db.query(User).filter(User.email == "pvp_b@test.cn").first()
     assert a and b
-    ta = create_access_token(a.id)
-    tb = create_access_token(b.id)
+    ta = create_access_token(a.id, a.password_hash)
+    tb = create_access_token(b.id, b.password_hash)
     key = STAG_SCENES[0]["scene_key"]
 
     # 1) normal match + play

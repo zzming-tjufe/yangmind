@@ -127,9 +127,25 @@ export function AppShell({
               {item.label}
             </button>
           ))}
+          <button
+            className="mobile-logout"
+            type="button"
+            onClick={logout}
+            title="退出登录"
+            aria-label="退出登录"
+          >
+            <span>↗</span>
+            退出登录
+          </button>
         </nav>
         {superAdmin && onToggleUserPreview ? (
-          <button className="switch preview-switch" type="button" onClick={onToggleUserPreview}>
+          <button
+            className="switch preview-switch"
+            type="button"
+            onClick={onToggleUserPreview}
+            title={previewingUserUi ? "返回管理后台" : "预览用户界面"}
+            aria-label={previewingUserUi ? "返回管理后台" : "预览用户界面"}
+          >
             {previewingUserUi ? "← 返回管理后台" : "◎ 预览用户界面"}
           </button>
         ) : null}

@@ -71,7 +71,7 @@ class GameRound(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("game_sessions.id"), index=True)
     round_no: Mapped[int] = mapped_column(Integer)
-    my_choice: Mapped[str] = mapped_column(String(1))  # A|B
+    my_choice: Mapped[str] = mapped_column(String(1))  # A|B|T (T=timeout)
     opponent_choice: Mapped[str] = mapped_column(String(1))
     my_points: Mapped[int] = mapped_column(Integer)
     opponent_points: Mapped[int] = mapped_column(Integer)

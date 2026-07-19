@@ -1,5 +1,8 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, func
+from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -25,9 +28,8 @@ from app.schemas.auth import (
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
-def _next_public_id(db: Session) -> str:
-    count = db.scalar(func.count(User.id)) or 0
-    return f"U-{1001 + count}"
+def _public_id_for_user(user_id: int) -> str:
+    return f"U-{1000 + user_id}"
 
 
 def _normalize_login(raw: str) -> str:
@@ -110,7 +112,9 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="邀请码类型无效")
 
     user = User(
-        public_id=_next_public_id(db),
+        # The final public id is derived from the database-generated primary key.
+        # A unique placeholder lets concurrent inserts safely reach the first flush.
+        public_id=f"PENDING-{uuid4().hex}",
         email=email,
         password_hash=hash_password(body.password),
         nickname=nickname,
@@ -118,19 +122,27 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         status="active",
         invited_by_code_id=invite.id,
     )
-    db.add(user)
-    db.flush()
-    db.add(
-        AccountEvent(
-            user_id=user.id,
-            event_type="register",
-            detail=f"注册成功 · 邀请码 {invite.code} · 角色 {role}",
+    try:
+        db.add(user)
+        db.flush()
+        user.public_id = _public_id_for_user(user.id)
+        db.add(
+            AccountEvent(
+                user_id=user.id,
+                event_type="register",
+                detail=f"注册成功 · 邀请码 {invite.code} · 角色 {role}",
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="注册请求发生冲突，请重试；若邮箱已注册请直接登录",
+        ) from None
     db.refresh(user)
 
-    token = create_access_token(user.id)
+    token = create_access_token(user.id, user.password_hash)
     return TokenResponse(access_token=token, user=UserOut.model_validate(user))
 
 
@@ -143,7 +155,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     if user.status != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已被禁用")
 
-    token = create_access_token(user.id)
+    token = create_access_token(user.id, user.password_hash)
     return TokenResponse(access_token=token, user=UserOut.model_validate(user))
 
 

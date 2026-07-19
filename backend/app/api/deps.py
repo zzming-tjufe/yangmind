@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.roles import is_staff, is_super_admin
-from app.core.security import decode_access_token
+from app.core.security import access_token_matches_password, decode_access_token
 from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -21,18 +21,24 @@ def get_current_user(
             detail="请先登录（缺少 Token）",
         )
 
-    user_id = decode_access_token(credentials.credentials)
-    if user_id is None:
+    token_data = decode_access_token(credentials.credentials)
+    if token_data is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="登录已失效，请重新登录",
         )
 
+    user_id, token_version = token_data
     user = db.get(User, user_id)
     if user is None or user.status != "active":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户不存在或已被禁用",
+        )
+    if not access_token_matches_password(token_version, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="密码已变更，请重新登录",
         )
     return user
 

@@ -176,7 +176,7 @@ def my_response(
         answers={str(k): v for k, v in amap.items()},
         personality=personality,
         quality_passed=response.quality_passed,
-        unlock_games=response.status == "submitted",
+        unlock_games=response.status == "submitted" and response.quality_passed is True,
     )
 
 
@@ -309,5 +309,5 @@ def submit(
         answers={str(k): v for k, v in amap.items()},
         personality=PersonalityScoreOut.model_validate(draft.personality_score),
         quality_passed=draft.quality_passed,
-        unlock_games=True,
+        unlock_games=draft.quality_passed is True,
     )

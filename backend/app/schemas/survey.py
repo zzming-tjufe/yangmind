@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SurveyItemOut(BaseModel):
@@ -26,6 +26,13 @@ class AnswerItem(BaseModel):
 
 class SaveAnswersRequest(BaseModel):
     answers: list[AnswerItem] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def reject_duplicate_item_numbers(self):
+        item_numbers = [answer.item_no for answer in self.answers]
+        if len(item_numbers) != len(set(item_numbers)):
+            raise ValueError("同一次保存请求中不能包含重复题号")
+        return self
 
 
 class PersonalityScoreOut(BaseModel):

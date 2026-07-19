@@ -2,6 +2,7 @@ import random
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
@@ -27,6 +28,7 @@ def _survey_submitted(db: Session, user_id: int) -> bool:
             SurveyResponse.user_id == user_id,
             SurveyResponse.instrument_id == instrument.id,
             SurveyResponse.status == "submitted",
+            SurveyResponse.quality_passed.is_(True),
         )
         .first()
         is not None
@@ -279,7 +281,14 @@ def play_round(
     else:
         session.current_round = round_no + 1
 
-    db.commit()
+    try:
+        db.commit()
+    except (IntegrityError, OperationalError):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="本轮已提交或正在处理，请刷新对局状态",
+        ) from None
     session = (
         db.query(GameSession)
         .options(joinedload(GameSession.rounds))

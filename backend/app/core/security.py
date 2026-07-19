@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -17,18 +19,38 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
-def create_access_token(user_id: int) -> str:
+def _password_token_version(password_hash: str) -> str:
+    """Bind a token to the current password without storing extra session state."""
+    return hmac.new(
+        settings.secret_key.encode("utf-8"),
+        password_hash.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def create_access_token(user_id: int, password_hash: str) -> str:
     """登录成功后发一张「门禁卡」(JWT)。"""
     expire = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
-    payload = {"sub": str(user_id), "exp": expire}
+    payload = {
+        "sub": str(user_id),
+        "ver": _password_token_version(password_hash),
+        "exp": expire,
+    }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def decode_access_token(token: str) -> int | None:
+def decode_access_token(token: str) -> tuple[int, str] | None:
     """验卡：解析出用户 id；无效或过期则返回 None。"""
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
         sub = payload.get("sub")
-        return int(sub) if sub is not None else None
+        version = payload.get("ver")
+        if sub is None or not isinstance(version, str):
+            return None
+        return int(sub), version
     except (InvalidTokenError, TypeError, ValueError):
         return None
+
+
+def access_token_matches_password(token_version: str, password_hash: str) -> bool:
+    return hmac.compare_digest(token_version, _password_token_version(password_hash))

@@ -39,6 +39,7 @@ def _require_survey(db: Session, user: User) -> None:
                 SurveyResponse.user_id == user.id,
                 SurveyResponse.instrument_id == instrument.id,
                 SurveyResponse.status == "submitted",
+                SurveyResponse.quality_passed.is_(True),
             )
             .first()
             is not None

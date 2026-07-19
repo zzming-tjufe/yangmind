@@ -142,6 +142,7 @@ def reset_user_password(
 ):
     user = db.get(User, user_id)
     assert_can_manage_participant(db, admin, user)
+    # Access tokens are bound to this hash, so resetting it revokes all old tokens.
     user.password_hash = hash_password(body.new_password)
     _log_event(
         db,

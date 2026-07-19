@@ -45,11 +45,13 @@ def on_startup():
             cleanup_duplicate_survey_responses,
             ensure_rbac_schema,
             ensure_survey_response_unique_index,
+            repair_pvp_timeout_choices,
         )
 
         ensure_rbac_schema(engine)
         cleanup_duplicate_survey_responses(db)
         ensure_survey_response_unique_index(engine)
+        repair_pvp_timeout_choices(db)
         seed_all(db)
     finally:
         db.close()

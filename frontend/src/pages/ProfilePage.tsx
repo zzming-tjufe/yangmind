@@ -5,7 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 
 export function ProfilePage() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { toast } = useToast();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -32,7 +32,8 @@ export function ProfilePage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      toast("密码已更新，请牢记新密码");
+      toast("密码已更新，请使用新密码重新登录");
+      logout();
     } catch (err) {
       toast(err instanceof ApiError ? err.message : "修改失败");
     } finally {

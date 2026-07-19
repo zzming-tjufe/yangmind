@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session
 
+from app.models.game import GameRound
+from app.models.match import PvpMatch, PvpRound
 from app.models.survey import PersonalityScore, SurveyAnswer, SurveyResponse
 
 
@@ -88,3 +90,40 @@ def ensure_survey_response_unique_index(engine) -> None:
                 "ON survey_responses (user_id, instrument_id)"
             )
         )
+
+
+def repair_pvp_timeout_choices(db: Session) -> int:
+    """Repair historical mirrored rounds that represented a PvP timeout as choice B."""
+    timed_out_rounds = (
+        db.query(PvpMatch, PvpRound)
+        .join(PvpRound, PvpRound.match_id == PvpMatch.id)
+        .filter((PvpRound.a_timed_out.is_(True)) | (PvpRound.b_timed_out.is_(True)))
+        .all()
+    )
+    changed = 0
+    for match, rnd in timed_out_rounds:
+        for session_id, my_timed_out, opponent_timed_out in (
+            (match.session_a_id, rnd.a_timed_out, rnd.b_timed_out),
+            (match.session_b_id, rnd.b_timed_out, rnd.a_timed_out),
+        ):
+            if session_id is None:
+                continue
+            mirrored = (
+                db.query(GameRound)
+                .filter(
+                    GameRound.session_id == session_id,
+                    GameRound.round_no == rnd.round_no,
+                )
+                .one_or_none()
+            )
+            if mirrored is None:
+                continue
+            if my_timed_out and mirrored.my_choice != "T":
+                mirrored.my_choice = "T"
+                changed += 1
+            if opponent_timed_out and mirrored.opponent_choice != "T":
+                mirrored.opponent_choice = "T"
+                changed += 1
+    if changed:
+        db.commit()
+    return changed
