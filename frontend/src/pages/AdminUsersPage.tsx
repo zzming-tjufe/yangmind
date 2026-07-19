@@ -11,10 +11,14 @@ import {
   type AdminStats,
   type AdminUser,
 } from "../api/admin";
+import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { isSuperAdmin } from "../lib/roles";
 
 export function AdminUsersPage() {
+  const { user } = useAuth();
   const { toast } = useToast();
+  const superAdmin = isSuperAdmin(user?.role);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [q, setQ] = useState("");
@@ -22,9 +26,13 @@ export function AdminUsersPage() {
   const [busy, setBusy] = useState(false);
 
   async function load(search?: string) {
-    const [s, u] = await Promise.all([getAdminStats(), getAdminUsers(search)]);
-    setStats(s);
+    const u = await getAdminUsers(search);
     setUsers(u.items);
+    if (superAdmin) {
+      setStats(await getAdminStats());
+    } else {
+      setStats(null);
+    }
   }
 
   useEffect(() => {
@@ -86,38 +94,46 @@ export function AdminUsersPage() {
 
   return (
     <div className="page">
-      <div className="statgrid admin-stats">
-        {[
-          ["总注册用户", stats ? String(stats.total_users) : "-", ""],
-          ["问卷完成率", stats ? `${stats.survey_completion_rate}%` : "-", ""],
-          ["有效博弈轮次", stats ? String(stats.valid_rounds) : "-", ""],
-          ["平均合作率", stats ? `${stats.avg_coop_rate}%` : "-", ""],
-        ].map(([a, b, c]) => (
-          <div className="stat card" key={a}>
-            <span>{a}</span>
-            <b>{b}</b>
-            <em>{c || " "}</em>
-          </div>
-        ))}
-      </div>
+      {superAdmin ? (
+        <div className="statgrid admin-stats">
+          {[
+            ["总注册用户", stats ? String(stats.total_users) : "-", ""],
+            ["问卷完成率", stats ? `${stats.survey_completion_rate}%` : "-", ""],
+            ["有效博弈轮次", stats ? String(stats.valid_rounds) : "-", ""],
+            ["平均合作率", stats ? `${stats.avg_coop_rate}%` : "-", ""],
+          ].map(([a, b, c]) => (
+            <div className="stat card" key={a}>
+              <span>{a}</span>
+              <b>{b}</b>
+              <em>{c || " "}</em>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p style={{ marginBottom: 16, color: "#666" }}>
+          你只能查看和管理通过你名下邀请码注册的员工。
+        </p>
+      )}
 
-      <div className="export-bar card">
-        <div>
-          <b>研究数据导出</b>
-          <small>下载 CSV，可用 Excel 打开</small>
+      {superAdmin ? (
+        <div className="export-bar card">
+          <div>
+            <b>研究数据导出</b>
+            <small>下载 CSV，可用 Excel 打开</small>
+          </div>
+          <div className="export-actions">
+            <button className="secondary" type="button" onClick={() => onExport("users")}>
+              导出用户
+            </button>
+            <button className="secondary" type="button" onClick={() => onExport("surveys")}>
+              导出问卷
+            </button>
+            <button className="secondary" type="button" onClick={() => onExport("rounds")}>
+              导出对局轮次
+            </button>
+          </div>
         </div>
-        <div className="export-actions">
-          <button className="secondary" type="button" onClick={() => onExport("users")}>
-            导出用户
-          </button>
-          <button className="secondary" type="button" onClick={() => onExport("surveys")}>
-            导出问卷
-          </button>
-          <button className="secondary" type="button" onClick={() => onExport("rounds")}>
-            导出对局轮次
-          </button>
-        </div>
-      </div>
+      ) : null}
 
       <section className="table card user-table">
         <div className="tablehead">

@@ -43,9 +43,11 @@ def on_startup():
     try:
         from app.services.db_fixes import (
             cleanup_duplicate_survey_responses,
+            ensure_rbac_schema,
             ensure_survey_response_unique_index,
         )
 
+        ensure_rbac_schema(engine)
         cleanup_duplicate_survey_responses(db)
         ensure_survey_response_unique_index(engine)
         seed_all(db)

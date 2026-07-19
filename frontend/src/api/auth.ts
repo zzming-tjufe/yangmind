@@ -19,7 +19,7 @@ export function register(body: {
   email: string;
   password: string;
   nickname: string;
-  invite_code?: string;
+  invite_code: string;
 }) {
   return api<TokenResponse>("/api/v1/auth/register", { method: "POST", json: body });
 }

@@ -15,6 +15,10 @@ class InviteCode(Base):
     used_count: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     note: Mapped[str] = mapped_column(String(255), default="")
+    # sub_admin=注册后成为子管；participant=注册后成为员工
+    kind: Mapped[str] = mapped_column(String(32), default="participant")
+    # 员工邀请码归属哪个子管（由其转发）；子管邀请码通常为空
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

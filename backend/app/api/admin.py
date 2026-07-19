@@ -7,8 +7,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_current_admin
+from app.api.deps import get_current_admin, get_current_super_admin
 from app.core.database import get_db
+from app.core.roles import (
+    INVITE_KIND_PARTICIPANT,
+    INVITE_KIND_SUB,
+    INVITE_KINDS,
+    ROLE_SUB,
+    is_super_admin,
+)
 from app.core.security import hash_password
 from app.data.personality_meta import PERSONALITY_META, personality_band
 from app.models.admin_extra import AccountEvent, InviteCode
@@ -22,6 +29,11 @@ from app.schemas.admin import (
     AdminUserRow,
     AdminUsersOut,
     DimensionDetail,
+)
+from app.services.rbac_scope import (
+    assert_can_manage_participant,
+    list_sub_admins,
+    participant_query_for_staff,
 )
 from app.services.stats import (
     admin_overview_stats,
@@ -55,7 +67,7 @@ def _log_event(
 
 
 @router.get("/stats/overview", response_model=AdminStatsOut)
-def stats_overview(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def stats_overview(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     return AdminStatsOut(**admin_overview_stats(db))
 
 
@@ -63,9 +75,9 @@ def stats_overview(db: Session = Depends(get_db), _: User = Depends(get_current_
 def list_users(
     q: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_admin),
 ):
-    query = db.query(User).filter(User.role == "participant")
+    query = participant_query_for_staff(db, admin)
     if q:
         like = f"%{q.strip()}%"
         query = query.filter((User.nickname.like(like)) | (User.public_id.like(like)) | (User.email.like(like)))
@@ -80,6 +92,7 @@ def list_users(
                 nickname=u.nickname,
                 public_id=u.public_id,
                 email=u.email,
+                role=u.role,
                 total_score=total,
                 sessions_count=sessions,
                 personality_summary=personality.summary_label if personality else "待生成",
@@ -103,8 +116,7 @@ def set_user_status(
     admin: User = Depends(get_current_admin),
 ):
     user = db.get(User, user_id)
-    if user is None or user.role != "participant":
-        raise HTTPException(status_code=404, detail="用户不存在")
+    assert_can_manage_participant(db, admin, user)
     user.status = body.status
     _log_event(
         db,
@@ -129,8 +141,7 @@ def reset_user_password(
     admin: User = Depends(get_current_admin),
 ):
     user = db.get(User, user_id)
-    if user is None or user.role != "participant":
-        raise HTTPException(status_code=404, detail="用户不存在")
+    assert_can_manage_participant(db, admin, user)
     user.password_hash = hash_password(body.new_password)
     _log_event(
         db,
@@ -147,11 +158,10 @@ def reset_user_password(
 def user_personality(
     user_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_admin),
 ):
     user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    assert_can_manage_participant(db, admin, user)
     personality = latest_personality(db, user_id)
     if personality is None:
         raise HTTPException(status_code=400, detail="该用户尚未完成问卷，暂时没有人格画像")
@@ -229,7 +239,7 @@ class ScenePatch(BaseModel):
 
 
 @router.get("/experiments", response_model=list[ExperimentAdminOut])
-def list_experiments(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def list_experiments(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     rows = (
         db.query(Experiment)
         .options(joinedload(Experiment.scenes))
@@ -255,7 +265,7 @@ def patch_experiment(
     experiment_id: int,
     body: ExperimentPatch,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    _: User = Depends(get_current_super_admin),
 ):
     exp = (
         db.query(Experiment)
@@ -315,7 +325,7 @@ def move_experiment(
     experiment_id: int,
     direction: int = Query(..., description="1 下移，-1 上移"),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    _: User = Depends(get_current_super_admin),
 ):
     rows = db.query(Experiment).order_by(Experiment.sort_order, Experiment.id).all()
     idx = next((i for i, e in enumerate(rows) if e.id == experiment_id), None)
@@ -337,7 +347,7 @@ def patch_scene(
     scene_id: int,
     body: ScenePatch,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    _: User = Depends(get_current_super_admin),
 ):
     scene = db.get(ExperimentScene, scene_id)
     if scene is None:
@@ -400,7 +410,7 @@ class ContentPatch(BaseModel):
 
 
 @router.get("/pages", response_model=list[PageAdminOut])
-def admin_list_pages(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def admin_list_pages(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     rows = db.query(PageConfig).order_by(PageConfig.sort_order, PageConfig.id).all()
     return [
         PageAdminOut(
@@ -422,7 +432,7 @@ def admin_patch_page(
     page_id: int,
     body: PagePatch,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    _: User = Depends(get_current_super_admin),
 ):
     row = db.get(PageConfig, page_id)
     if row is None:
@@ -450,7 +460,7 @@ def admin_patch_page(
 
 
 @router.get("/content-blocks", response_model=list[ContentAdminOut])
-def admin_list_content(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def admin_list_content(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     rows = db.query(ContentBlock).order_by(ContentBlock.block_key).all()
     return [
         ContentAdminOut(
@@ -471,7 +481,7 @@ def admin_patch_content(
     block_id: int,
     body: ContentPatch,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    _: User = Depends(get_current_super_admin),
 ):
     row = db.get(ContentBlock, block_id)
     if row is None:
@@ -500,65 +510,144 @@ def admin_patch_content(
 class InviteOut(BaseModel):
     id: int
     code: str
+    kind: str
     max_uses: int
     used_count: int
     enabled: bool
     note: str
+    owner_id: int | None = None
+    owner_nickname: str | None = None
     created_at: datetime | None = None
 
 
 class InviteCreate(BaseModel):
     code: str = Field(min_length=4, max_length=64)
+    kind: str = Field(default=INVITE_KIND_PARTICIPANT)
     max_uses: int = Field(default=0, ge=0)
     note: str = ""
+    owner_id: int | None = None
+
+
+class InviteAssignBody(BaseModel):
+    owner_id: int | None = None
+
+
+class SubAdminOut(BaseModel):
+    id: int
+    nickname: str
+    email: str
+    public_id: str
+
+
+def _invite_out(db: Session, row: InviteCode) -> InviteOut:
+    owner_nickname = None
+    if row.owner_id:
+        owner = db.get(User, row.owner_id)
+        owner_nickname = owner.nickname if owner else None
+    return InviteOut(
+        id=row.id,
+        code=row.code,
+        kind=row.kind or INVITE_KIND_PARTICIPANT,
+        max_uses=row.max_uses,
+        used_count=row.used_count,
+        enabled=row.enabled,
+        note=row.note,
+        owner_id=row.owner_id,
+        owner_nickname=owner_nickname,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/sub-admins", response_model=list[SubAdminOut])
+def get_sub_admins(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
+    return [
+        SubAdminOut(id=u.id, nickname=u.nickname, email=u.email, public_id=u.public_id)
+        for u in list_sub_admins(db)
+    ]
 
 
 @router.get("/invite-codes", response_model=list[InviteOut])
-def list_invites(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
-    rows = db.query(InviteCode).order_by(InviteCode.id.desc()).all()
-    return [
-        InviteOut(
-            id=r.id,
-            code=r.code,
-            max_uses=r.max_uses,
-            used_count=r.used_count,
-            enabled=r.enabled,
-            note=r.note,
-            created_at=r.created_at,
+def list_invites(db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
+    q = db.query(InviteCode)
+    if not is_super_admin(admin):
+        q = q.filter(
+            InviteCode.owner_id == admin.id,
+            InviteCode.kind == INVITE_KIND_PARTICIPANT,
         )
-        for r in rows
-    ]
+    rows = q.order_by(InviteCode.id.desc()).all()
+    return [_invite_out(db, r) for r in rows]
 
 
 @router.post("/invite-codes", response_model=InviteOut, status_code=201)
 def create_invite(
     body: InviteCreate,
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_super_admin),
 ):
     code = body.code.strip().upper()
+    kind = body.kind.strip()
+    if kind not in INVITE_KINDS:
+        raise HTTPException(status_code=400, detail="邀请码类型无效")
     if db.query(InviteCode).filter(InviteCode.code == code).first():
         raise HTTPException(status_code=400, detail="邀请码已存在")
+
+    owner_id = body.owner_id
+    if kind == INVITE_KIND_SUB:
+        owner_id = None
+    elif owner_id is not None:
+        owner = db.get(User, owner_id)
+        if owner is None or owner.role != ROLE_SUB:
+            raise HTTPException(status_code=400, detail="只能分配给子管理员")
+
     row = InviteCode(
         code=code,
+        kind=kind,
         max_uses=body.max_uses,
         note=body.note.strip(),
+        owner_id=owner_id,
         created_by=admin.id,
         enabled=True,
     )
     db.add(row)
-    _log_event(db, event_type="invite_created", detail=code, actor_id=admin.id)
+    _log_event(
+        db,
+        event_type="invite_created",
+        detail=f"{code} kind={kind} owner={owner_id}",
+        actor_id=admin.id,
+    )
     db.commit()
     db.refresh(row)
-    return InviteOut(
-        id=row.id,
-        code=row.code,
-        max_uses=row.max_uses,
-        used_count=row.used_count,
-        enabled=row.enabled,
-        note=row.note,
-        created_at=row.created_at,
+    return _invite_out(db, row)
+
+
+@router.patch("/invite-codes/{invite_id}/assign", response_model=InviteOut)
+def assign_invite(
+    invite_id: int,
+    body: InviteAssignBody,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_super_admin),
+):
+    row = db.get(InviteCode, invite_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    if (row.kind or INVITE_KIND_PARTICIPANT) != INVITE_KIND_PARTICIPANT:
+        raise HTTPException(status_code=400, detail="只有员工邀请码可以分配给子管理员")
+
+    owner_id = body.owner_id
+    if owner_id is not None:
+        owner = db.get(User, owner_id)
+        if owner is None or owner.role != ROLE_SUB:
+            raise HTTPException(status_code=400, detail="只能分配给子管理员")
+    row.owner_id = owner_id
+    _log_event(
+        db,
+        event_type="invite_assigned",
+        detail=f"{row.code} -> owner={owner_id}",
+        actor_id=admin.id,
     )
+    db.commit()
+    db.refresh(row)
+    return _invite_out(db, row)
 
 
 @router.patch("/invite-codes/{invite_id}")
@@ -566,7 +655,7 @@ def toggle_invite(
     invite_id: int,
     enabled: bool = Query(...),
     db: Session = Depends(get_db),
-    admin: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_super_admin),
 ):
     row = db.get(InviteCode, invite_id)
     if row is None:
@@ -595,7 +684,7 @@ class AccountEventOut(BaseModel):
 def list_events(
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_admin),
+    _: User = Depends(get_current_super_admin),
 ):
     rows = db.query(AccountEvent).order_by(AccountEvent.id.desc()).limit(limit).all()
     return [
@@ -628,7 +717,7 @@ def _csv_response(filename: str, rows: list[list]) -> StreamingResponse:
 
 
 @router.get("/export/users.csv")
-def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     header = [
         "id",
         "public_id",
@@ -675,7 +764,7 @@ def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_ad
 
 
 @router.get("/export/surveys.csv")
-def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     header = ["user_public_id", "nickname", "email", "response_id", "status", "item_no", "value", "submitted_at"]
     rows: list[list] = [header]
     responses = (
@@ -721,7 +810,7 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
 
 
 @router.get("/export/rounds.csv")
-def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_admin)):
+def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     header = [
         "user_public_id",
         "nickname",

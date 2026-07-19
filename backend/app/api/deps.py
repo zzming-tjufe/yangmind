@@ -3,6 +3,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.roles import is_staff, is_super_admin
 from app.core.security import decode_access_token
 from app.models.user import User
 
@@ -37,10 +38,20 @@ def get_current_user(
 
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
-    """只有管理员能进。"""
-    if current_user.role != "admin":
+    """总管或子管（管理端员工接口）。"""
+    if not is_staff(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="需要管理员权限",
+        )
+    return current_user
+
+
+def get_current_super_admin(current_user: User = Depends(get_current_user)) -> User:
+    """仅总管。"""
+    if not is_super_admin(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要总管理员权限",
         )
     return current_user

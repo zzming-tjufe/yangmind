@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AppShell, type View } from "./components/AppShell";
 import { useAuth } from "./context/AuthContext";
+import { isStaff, isSuperAdmin } from "./lib/roles";
 import { AuthPage } from "./pages/AuthPage";
 import { AdminAccountsPage } from "./pages/AdminAccountsPage";
 import { AdminContentPage } from "./pages/AdminContentPage";
@@ -20,11 +21,11 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     setPreviewingUserUi(false);
-    setView(user.role === "admin" ? "users" : "bfi");
+    setView(isStaff(user.role) ? "users" : "bfi");
   }, [user]);
 
   function toggleUserPreview() {
-    if (user?.role !== "admin") return;
+    if (!isSuperAdmin(user?.role)) return;
     setPreviewingUserUi((current) => {
       setView(current ? "users" : "bfi");
       return !current;

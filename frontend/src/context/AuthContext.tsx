@@ -19,7 +19,7 @@ type AuthContextValue = {
     email: string,
     password: string,
     nickname: string,
-    inviteCode?: string,
+    inviteCode: string,
   ) => Promise<User>;
   logout: () => void;
   refresh: () => Promise<void>;
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const register = useCallback(
-    async (email: string, password: string, nickname: string, inviteCode?: string) => {
+    async (email: string, password: string, nickname: string, inviteCode: string) => {
       const res = await authApi.register({
         email,
         password,

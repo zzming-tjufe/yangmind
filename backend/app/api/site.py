@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.roles import is_super_admin
 from app.models.cms import ContentBlock, PageConfig
 from app.models.user import User
 
@@ -33,7 +34,7 @@ def list_visible_pages(
     """参与端导航用：仅返回已发布页面。管理员可看全部（含草稿）。"""
     q = db.query(PageConfig).order_by(PageConfig.sort_order, PageConfig.id)
     rows = q.all()
-    if current_user.role != "admin":
+    if not is_super_admin(current_user):
         rows = [r for r in rows if r.status == "published"]
     return [
         PageOut(

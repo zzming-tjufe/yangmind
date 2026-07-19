@@ -27,6 +27,7 @@ export type AdminUser = {
   nickname: string;
   public_id: string;
   email: string;
+  role: string;
   total_score: number;
   sessions_count: number;
   personality_summary: string;
@@ -79,11 +80,21 @@ export type AdminExperiment = {
 export type InviteCode = {
   id: number;
   code: string;
+  kind: string;
   max_uses: number;
   used_count: number;
   enabled: boolean;
   note: string;
+  owner_id?: number | null;
+  owner_nickname?: string | null;
   created_at?: string;
+};
+
+export type SubAdmin = {
+  id: number;
+  nickname: string;
+  email: string;
+  public_id: string;
 };
 
 export type AccountEvent = {
@@ -231,8 +242,25 @@ export function getInviteCodes() {
   return api<InviteCode[]>("/api/v1/admin/invite-codes");
 }
 
-export function createInviteCode(body: { code: string; max_uses: number; note: string }) {
+export function getSubAdmins() {
+  return api<SubAdmin[]>("/api/v1/admin/sub-admins");
+}
+
+export function createInviteCode(body: {
+  code: string;
+  kind: "sub_admin" | "participant";
+  max_uses: number;
+  note: string;
+  owner_id?: number | null;
+}) {
   return api<InviteCode>("/api/v1/admin/invite-codes", { method: "POST", json: body });
+}
+
+export function assignInviteCode(id: number, owner_id: number | null) {
+  return api<InviteCode>(`/api/v1/admin/invite-codes/${id}/assign`, {
+    method: "PATCH",
+    json: { owner_id },
+  });
 }
 
 export function toggleInviteCode(id: number, enabled: boolean) {

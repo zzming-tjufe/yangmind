@@ -47,10 +47,14 @@ export function AuthPage() {
       toast("请输入昵称");
       return;
     }
+    if (nextMode === "register" && !inviteCode.trim()) {
+      toast("请填写邀请码");
+      return;
+    }
     setBusy(true);
     try {
       if (nextMode === "login") await login(account, password);
-      else await register(account, password, nickname.trim(), inviteCode.trim() || undefined);
+      else await register(account, password, nickname.trim(), inviteCode.trim());
       toast(nextMode === "login" ? "登录成功" : "注册成功");
     } catch (e) {
       toast(
@@ -204,11 +208,12 @@ export function AuthPage() {
                 </span>
               </label>
               <label className="field">
-                邀请码（可选）
+                邀请码（必填）
                 <input
-                  placeholder="如有邀请码请填写"
+                  placeholder="请向管理员索取邀请码"
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
+                  required
                 />
               </label>
               <button

@@ -20,6 +20,7 @@ class AdminUserRow(BaseModel):
     nickname: str
     public_id: str
     email: EmailStr
+    role: str = "participant"
     total_score: int
     sessions_count: int
     personality_summary: str

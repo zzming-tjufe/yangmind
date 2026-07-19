@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useSitePages } from "../hooks/useSite";
+import { isStaff, isSubAdmin, isSuperAdmin } from "../lib/roles";
 
 type View =
   | "bfi"
@@ -20,12 +21,18 @@ const userNavBase: { id: View; icon: string; label: string }[] = [
   { id: "profile", icon: "◌", label: "我的账号" },
 ];
 
-const adminNav: { id: View; icon: string; label: string }[] = [
+const superAdminNav: { id: View; icon: string; label: string }[] = [
   { id: "users", icon: "◉", label: "用户数据" },
   { id: "experiments", icon: "⌁", label: "博弈实验" },
   { id: "accounts", icon: "⊕", label: "注册与登录" },
   { id: "pages", icon: "▤", label: "页面管理" },
   { id: "content", icon: "✦", label: "内容管理" },
+  { id: "profile", icon: "◌", label: "我的账号" },
+];
+
+const subAdminNav: { id: View; icon: string; label: string }[] = [
+  { id: "users", icon: "◉", label: "用户数据" },
+  { id: "accounts", icon: "⊕", label: "我的邀请码" },
   { id: "profile", icon: "◌", label: "我的账号" },
 ];
 
@@ -59,10 +66,13 @@ export function AppShell({
   children,
 }: Props) {
   const { user, logout } = useAuth();
-  const isAdmin = user?.role === "admin";
-  const showParticipantUi = !isAdmin || previewingUserUi;
+  const superAdmin = isSuperAdmin(user?.role);
+  const subAdmin = isSubAdmin(user?.role);
+  const staff = isStaff(user?.role);
+  const showParticipantUi = !staff || previewingUserUi;
   const { byKey, pages } = useSitePages();
 
+  const staffNav = superAdmin ? superAdminNav : subAdmin ? subAdminNav : [];
   const items = showParticipantUi
     ? [...userNavBase.filter((item) => {
         if (item.id === "profile") return true;
@@ -70,7 +80,7 @@ export function AppShell({
         if (!pages.length) return true;
         return cfg?.status === "published";
       })]
-    : adminNav;
+    : staffNav;
 
   const pageCfg = byKey[view];
   const [fallbackTitle, fallbackSub] = fallbackTitles[view];
@@ -96,10 +106,16 @@ export function AppShell({
           <strong>YangMind Lab</strong>
         </div>
         <div className="space" id="space-title">
-          {previewingUserUi ? "用户界面预览" : isAdmin ? "管理控制台" : "参与者空间"}
+          {previewingUserUi
+            ? "用户界面预览"
+            : superAdmin
+              ? "管理控制台"
+              : subAdmin
+                ? "子管理空间"
+                : "参与者空间"}
         </div>
         <nav className="nav" id="nav">
-          <small>{showParticipantUi ? "实验参与" : "实验管理"}</small>
+          <small>{showParticipantUi ? "实验参与" : subAdmin ? "团队管理" : "实验管理"}</small>
           {items.map((item) => (
             <button
               key={item.id}
@@ -112,7 +128,7 @@ export function AppShell({
             </button>
           ))}
         </nav>
-        {isAdmin && onToggleUserPreview ? (
+        {superAdmin && onToggleUserPreview ? (
           <button className="switch preview-switch" type="button" onClick={onToggleUserPreview}>
             {previewingUserUi ? "← 返回管理后台" : "◎ 预览用户界面"}
           </button>
@@ -124,7 +140,7 @@ export function AppShell({
           <div>
             <b id="profile-name">{user?.nickname}</b>
             <small id="profile-id">
-              {isAdmin ? user?.email : `ID · ${user?.public_id}`}
+              {staff ? user?.email : `ID · ${user?.public_id}`}
             </small>
           </div>
           <button onClick={logout} title="退出">
@@ -138,7 +154,13 @@ export function AppShell({
             <div className="crumb">
               YANGMIND LAB <em>/</em>{" "}
               <span id="crumb-role">
-                {previewingUserUi ? "用户界面预览" : isAdmin ? "管理控制台" : "参与者空间"}
+                {previewingUserUi
+                  ? "用户界面预览"
+                  : superAdmin
+                    ? "管理控制台"
+                    : subAdmin
+                      ? "子管理空间"
+                      : "参与者空间"}
               </span>
             </div>
             <h1 id="page-title">{title}</h1>

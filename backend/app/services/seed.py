@@ -104,7 +104,9 @@ def seed_cms_if_needed(db: Session) -> None:
 
 
 def seed_admin_if_needed(db: Session) -> None:
-    """确保唯一管理员：固定账号，同步密码，并降级其它 admin。"""
+    """确保唯一总管账号；旧 role=admin 迁移为 super_admin；保留已有 sub_admin。"""
+    from app.core.roles import ROLE_ADMIN_LEGACY, ROLE_SUPER
+
     email = settings.seed_admin_email.lower().strip()
     admin = db.query(User).filter(User.email == email).first()
     if admin is None:
@@ -114,20 +116,26 @@ def seed_admin_if_needed(db: Session) -> None:
             email=email,
             password_hash=hash_password(settings.seed_admin_password),
             nickname=settings.seed_admin_nickname,
-            role="admin",
+            role=ROLE_SUPER,
             status="active",
         )
         db.add(admin)
     else:
-        admin.role = "admin"
+        admin.role = ROLE_SUPER
         admin.status = "active"
         admin.nickname = settings.seed_admin_nickname
         admin.password_hash = hash_password(settings.seed_admin_password)
 
-    # 其它账号一律不能是管理员
-    others = db.query(User).filter(User.role == "admin", User.email != email).all()
+    # 其它遗留 admin 升为总管角色名统一，避免出现第二个总管：降为 participant
+    others = (
+        db.query(User)
+        .filter(User.role.in_([ROLE_ADMIN_LEGACY, ROLE_SUPER]), User.email != email)
+        .all()
+    )
     for u in others:
-        u.role = "participant"
+        # 明确是子管的不碰；仅清理误标的总管/旧 admin
+        if u.role == ROLE_ADMIN_LEGACY or u.role == ROLE_SUPER:
+            u.role = "participant"
 
     db.commit()
 

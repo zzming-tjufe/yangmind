@@ -1,11 +1,48 @@
-"""启动时对已有 SQLite 库做轻量修补（去重 + 补唯一索引）。"""
+"""启动时对已有库做轻量修补（去重 + 补唯一索引 + 补 RBAC 列）。"""
 
 from __future__ import annotations
 
-from sqlalchemy import func, text
+from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.survey import PersonalityScore, SurveyAnswer, SurveyResponse
+
+
+def _existing_columns(engine, table: str) -> set[str]:
+    insp = inspect(engine)
+    if table not in insp.get_table_names():
+        return set()
+    return {c["name"] for c in insp.get_columns(table)}
+
+
+def ensure_rbac_schema(engine) -> None:
+    """为已有库补上多层权限相关列（create_all 不会改旧表）。"""
+    user_cols = _existing_columns(engine, "users")
+    invite_cols = _existing_columns(engine, "invite_codes")
+    stmts: list[str] = []
+    if "users" in inspect(engine).get_table_names() and "invited_by_code_id" not in user_cols:
+        stmts.append("ALTER TABLE users ADD COLUMN invited_by_code_id INTEGER")
+    if "invite_codes" in inspect(engine).get_table_names():
+        if "kind" not in invite_cols:
+            stmts.append(
+                "ALTER TABLE invite_codes ADD COLUMN kind VARCHAR(32) DEFAULT 'participant'"
+            )
+        if "owner_id" not in invite_cols:
+            stmts.append("ALTER TABLE invite_codes ADD COLUMN owner_id INTEGER")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for sql in stmts:
+            conn.execute(text(sql))
+        # 旧邀请码统一标成员工码
+        if "kind" not in invite_cols:
+            conn.execute(
+                text(
+                    "UPDATE invite_codes SET kind = 'participant' "
+                    "WHERE kind IS NULL OR kind = ''"
+                )
+            )
+
 
 
 def cleanup_duplicate_survey_responses(db: Session) -> int:
