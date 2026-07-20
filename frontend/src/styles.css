@@ -1049,16 +1049,13 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
 }
 .ann-panel-head {
   flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  display: block;
   padding: 20px 22px 14px;
   border-bottom: 1px solid #e5dfd3;
 }
 .ann-panel-head b {
   display: block;
-  font-family: "SimSun", "Microsoft YaHei", serif;
+  font-family: "Times New Roman", Times, "SimSun", "Songti SC", "Microsoft YaHei", serif;
   font-size: 22px;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -1068,17 +1065,6 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
   margin-top: 6px;
   color: var(--muted);
   font-size: 12px;
-}
-.ann-panel-head > button {
-  width: 36px;
-  height: 36px;
-  border: 1px solid #e3ddcf;
-  border-radius: 10px;
-  background: #fff;
-  color: #6f5a2a;
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
 }
 .ann-panel-body {
   flex: 1 1 auto;
@@ -1098,9 +1084,19 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
 .ann-panel-item.is-pinned .ann-title {
   color: #6f5218;
 }
+/* 中文走宋体，英文/数字走 Times New Roman（浏览器按字形自动选） */
+.ann-title,
+.ann-md.md-body,
+.md-body.ann-md,
+.md-body,
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  font-family: "Times New Roman", Times, "SimSun", "Songti SC", "Microsoft YaHei", serif;
+}
 .ann-title {
   margin: 0 0 10px;
-  font-family: "SimSun", "Microsoft YaHei", serif;
   font-size: 22px;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -1130,7 +1126,6 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
 .md-body h2,
 .md-body h3,
 .md-body h4 {
-  font-family: "SimSun", "Microsoft YaHei", serif;
   font-weight: 500;
   letter-spacing: 0.06em;
   margin: 1em 0 0.45em;

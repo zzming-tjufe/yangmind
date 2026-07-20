@@ -140,9 +140,6 @@ export function AnnouncementBell({ className }: Props) {
                   : "可随时从右上角再次打开"}
               </small>
             </div>
-            <button type="button" onClick={closePanel} aria-label="关闭">
-              ×
-            </button>
           </div>
           <div className="ann-panel-body">
             {displayItems.length === 0 && (
