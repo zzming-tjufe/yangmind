@@ -390,7 +390,7 @@ export function AdminContentPage() {
                   rows={8}
                   value={annForm.body}
                   onChange={(e) => setAnnForm((f) => ({ ...f, body: e.target.value }))}
-                  placeholder="支持多行。可写测试时间、注意事项或版本变更要点。"
+                  placeholder="支持 Markdown。可用标题、列表、加粗等，例如：## 更新要点"
                 />
               </label>
               <label className="field">

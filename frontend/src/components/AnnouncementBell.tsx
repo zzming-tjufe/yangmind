@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { getSiteAnnouncements, type SiteAnnouncement } from "../api/admin";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { MarkdownBody } from "./MarkdownBody";
 
 const KIND_LABEL: Record<string, string> = {
   notice: "测试通告",
@@ -43,7 +45,6 @@ function formatDate(iso: string | null) {
 }
 
 type Props = {
-  /** 顶栏右侧插槽以外也可单独使用 */
   className?: string;
 };
 
@@ -51,6 +52,7 @@ type Props = {
  * 右上角公告入口：
  * - 新发布的公告自动弹窗一次，关闭后记入本机已读，不再自动弹出
  * - 随时可点按钮再次查看全部公告
+ * - 遮罩通过 Portal 挂到 body，覆盖侧栏+主区整页变暗
  */
 export function AnnouncementBell({ className }: Props) {
   const { user } = useAuth();
@@ -82,13 +84,21 @@ export function AnnouncementBell({ className }: Props) {
     [items, seen],
   );
 
-  // 有未读时自动弹出一次
   useEffect(() => {
     if (!loaded || userId == null) return;
     if (unread.length === 0) return;
     setAutoMode(true);
     setOpen(true);
   }, [loaded, unread.length, userId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
 
   function markCurrentUnreadSeen() {
     if (userId == null || unread.length === 0) return;
@@ -110,6 +120,65 @@ export function AnnouncementBell({ className }: Props) {
 
   const displayItems = autoMode && unread.length > 0 ? unread : items;
 
+  const panel =
+    open &&
+    createPortal(
+      <div className="ann-overlay" onClick={closePanel}>
+        <div
+          className="ann-panel card"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal
+          aria-labelledby="ann-panel-title"
+        >
+          <div className="ann-panel-head">
+            <div>
+              <b id="ann-panel-title">{autoMode ? "新公告" : "公告栏"}</b>
+              <small>
+                {autoMode
+                  ? "本次更新内容，关闭后不再自动弹出"
+                  : "可随时从右上角再次打开"}
+              </small>
+            </div>
+            <button type="button" onClick={closePanel} aria-label="关闭">
+              ×
+            </button>
+          </div>
+          <div className="ann-panel-body">
+            {displayItems.length === 0 && (
+              <div className="notice-empty" style={{ border: 0, boxShadow: "none" }}>
+                <b>暂无公告</b>
+                <p>有新的测试安排或版本更新时会显示在这里。</p>
+              </div>
+            )}
+            {displayItems.map((item) => (
+              <article
+                key={item.id}
+                className={`ann-panel-item${item.pinned ? " is-pinned" : ""}`}
+              >
+                <div className="notice-meta">
+                  <span className={`notice-kind kind-${item.kind}`}>
+                    {KIND_LABEL[item.kind] || item.kind}
+                  </span>
+                  {item.pinned ? <span className="notice-pin">置顶</span> : null}
+                  {!seen.includes(item.id) ? <span className="notice-pin">新</span> : null}
+                  <time>{formatDate(item.published_at)}</time>
+                </div>
+                <h3 className="ann-title">{item.title}</h3>
+                <MarkdownBody content={item.body || ""} className="ann-md" />
+              </article>
+            ))}
+          </div>
+          <div className="ann-panel-foot">
+            <button className="primary" type="button" onClick={closePanel}>
+              {autoMode ? "我知道了" : "关闭"}
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+
   return (
     <>
       <button
@@ -122,62 +191,7 @@ export function AnnouncementBell({ className }: Props) {
         <span className="ann-bell-label">公告</span>
         {unread.length > 0 ? <em className="ann-bell-dot">{unread.length}</em> : null}
       </button>
-
-      {open && (
-        <div className="profile-overlay ann-overlay" onClick={closePanel}>
-          <div
-            className="profile-modal cms-modal ann-panel"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal
-            aria-labelledby="ann-panel-title"
-          >
-            <div className="profile-modal-head">
-              <div className="profile-person">
-                <i>!</i>
-                <div>
-                  <b id="ann-panel-title">{autoMode ? "新公告" : "公告栏"}</b>
-                  <small>
-                    {autoMode
-                      ? "本次更新内容，关闭后不再自动弹出"
-                      : "可随时从右上角再次打开"}
-                  </small>
-                </div>
-              </div>
-              <button type="button" onClick={closePanel} aria-label="关闭">
-                ×
-              </button>
-            </div>
-            <div className="ann-panel-body">
-              {displayItems.length === 0 && (
-                <div className="notice-empty" style={{ border: 0, boxShadow: "none" }}>
-                  <b>暂无公告</b>
-                  <p>有新的测试安排或版本更新时会显示在这里。</p>
-                </div>
-              )}
-              {displayItems.map((item) => (
-                <article key={item.id} className={`ann-panel-item${item.pinned ? " is-pinned" : ""}`}>
-                  <div className="notice-meta">
-                    <span className={`notice-kind kind-${item.kind}`}>
-                      {KIND_LABEL[item.kind] || item.kind}
-                    </span>
-                    {item.pinned ? <span className="notice-pin">置顶</span> : null}
-                    {!seen.includes(item.id) ? <span className="notice-pin">新</span> : null}
-                    <time>{formatDate(item.published_at)}</time>
-                  </div>
-                  <h3>{item.title}</h3>
-                  <div className="notice-body">{item.body || "（无正文）"}</div>
-                </article>
-              ))}
-            </div>
-            <div className="ann-panel-foot">
-              <button className="primary" type="button" onClick={closePanel}>
-                {autoMode ? "我知道了" : "关闭"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {panel}
     </>
   );
 }

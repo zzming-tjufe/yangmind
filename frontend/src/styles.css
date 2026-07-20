@@ -947,19 +947,47 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
 }
 
 /* 顶栏公告按钮 + 弹层 */
+.topbar {
+  height: auto !important;
+  min-height: 88px;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  overflow: visible;
+}
+.topbar > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.topbar h1 {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar p {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .topbar-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  margin-left: auto;
+  max-width: 42%;
 }
 .ann-bell {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 38px;
-  padding: 0 14px;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  max-width: 100%;
+  padding: 0 12px;
   border: 1px solid #e4ddcf;
   border-radius: 10px;
   background: #fffefa;
@@ -967,6 +995,7 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
   transition: border-color 0.18s ease, background 0.18s ease;
 }
 .ann-bell:hover {
@@ -989,17 +1018,71 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
   font-style: normal;
   font-weight: 800;
 }
+/* 弹层：Portal 挂到 body，整页（含侧栏）统一变暗 */
 .ann-overlay {
-  z-index: 60;
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: max(12px, env(safe-area-inset-top, 0px)) 12px max(12px, env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+  background: rgba(12, 11, 9, 0.58);
+  backdrop-filter: blur(4px);
+  animation: in 0.2s ease;
 }
 .ann-panel {
-  width: min(560px, 100%);
-  max-height: min(82vh, 720px);
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  max-height: calc(100vh - 24px);
+  margin: 12px auto;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid #ebe5da;
+  border-radius: 14px;
+  background: #fbfaf6;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+}
+.ann-panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid #e5dfd3;
+}
+.ann-panel-head b {
+  display: block;
+  font-family: "SimSun", "Microsoft YaHei", serif;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+.ann-panel-head small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ann-panel-head > button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #e3ddcf;
+  border-radius: 10px;
+  background: #fff;
+  color: #6f5a2a;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
 }
 .ann-panel-body {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 8px 22px 18px;
   display: grid;
@@ -1012,18 +1095,136 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
 .ann-panel-item:last-child {
   border-bottom: 0;
 }
-.ann-panel-item.is-pinned h3 {
+.ann-panel-item.is-pinned .ann-title {
   color: #6f5218;
 }
-.ann-panel-item h3 {
-  margin: 0 0 8px;
-  font-size: 17px;
+.ann-title {
+  margin: 0 0 10px;
+  font-family: "SimSun", "Microsoft YaHei", serif;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+}
+.ann-md.md-body,
+.md-body.ann-md {
+  font-size: 16px;
+  line-height: 1.9;
+  color: #3f3a32;
+}
+.md-body {
+  font-size: 16px;
+  line-height: 1.9;
+  color: #3f3a32;
+}
+.md-body > *:first-child {
+  margin-top: 0;
+}
+.md-body > *:last-child {
+  margin-bottom: 0;
+}
+.md-body p {
+  margin: 0 0 0.85em;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  font-family: "SimSun", "Microsoft YaHei", serif;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  margin: 1em 0 0.45em;
+  line-height: 1.4;
+}
+.md-body h1 { font-size: 1.35em; }
+.md-body h2 { font-size: 1.22em; }
+.md-body h3 { font-size: 1.1em; }
+.md-body ul,
+.md-body ol {
+  margin: 0 0 0.85em;
+  padding-left: 1.35em;
+}
+.md-body li {
+  margin: 0.25em 0;
+}
+.md-body strong {
+  font-weight: 700;
+  color: #2c2820;
+}
+.md-body a {
+  color: #81621c;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-body code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: #f0ebe1;
+  font-size: 0.92em;
+}
+.md-body pre {
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #f3eee4;
+  margin: 0 0 0.85em;
+}
+.md-body pre code {
+  padding: 0;
+  background: transparent;
+}
+.md-body blockquote {
+  margin: 0 0 0.85em;
+  padding: 6px 0 6px 14px;
+  border-left: 3px solid var(--gold);
+  color: #5c5548;
+}
+.md-body hr {
+  border: 0;
+  border-top: 1px solid #e5dfd3;
+  margin: 1.1em 0;
 }
 .ann-panel-foot {
+  flex: 0 0 auto;
   padding: 14px 22px 20px;
   border-top: 1px solid #e5dfd3;
   display: flex;
   justify-content: flex-end;
+}
+.notice-item .ann-title {
+  font-size: 24px;
+}
+.notice-item .ann-md {
+  font-size: 16px;
+}
+@media (max-width: 560px) {
+  .topbar-actions {
+    max-width: none;
+  }
+  .ann-bell {
+    height: 34px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  .ann-title {
+    font-size: 20px;
+  }
+  .ann-md.md-body,
+  .md-body.ann-md {
+    font-size: 15px;
+  }
+  .ann-panel {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    max-height: calc(100vh - 16px);
+    margin: 8px auto;
+  }
+  .ann-panel-body {
+    padding: 6px 16px 14px;
+  }
+  .ann-panel-head {
+    padding: 16px 16px 12px;
+  }
 }
 
 

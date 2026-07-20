@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api/client";
 import { getSiteAnnouncements, type SiteAnnouncement } from "../api/admin";
+import { MarkdownBody } from "../components/MarkdownBody";
 import { useToast } from "../context/ToastContext";
 
 type Filter = "all" | "notice" | "changelog";
@@ -93,8 +94,8 @@ export function NoticesPage() {
               {item.pinned ? <span className="notice-pin">置顶</span> : null}
               <time>{formatDate(item.published_at)}</time>
             </div>
-            <h3>{item.title}</h3>
-            <div className="notice-body">{item.body || "（无正文）"}</div>
+            <h3 className="ann-title">{item.title}</h3>
+            <MarkdownBody content={item.body || ""} className="ann-md" />
           </article>
         ))}
       </div>
