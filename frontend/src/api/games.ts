@@ -20,6 +20,7 @@ export type StagProgress = {
   rounds_per_scene: number;
   unlock_games: boolean;
   survey_done: boolean;
+  survey_quality_failed?: boolean;
   experiment_status: string;
   done_count: number;
   required_count: number;

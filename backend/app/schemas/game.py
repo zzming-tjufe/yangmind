@@ -23,6 +23,7 @@ class StagHuntProgressOut(BaseModel):
     rounds_per_scene: int
     unlock_games: bool
     survey_done: bool = False
+    survey_quality_failed: bool = False
     experiment_status: str = "active"
     done_count: int
     required_count: int

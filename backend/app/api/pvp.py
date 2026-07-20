@@ -31,19 +31,34 @@ router = APIRouter(prefix="/api/v1/pvp", tags=["pvp"])
 
 def _require_survey(db: Session, user: User) -> None:
     instrument = db.query(SurveyInstrument).filter(SurveyInstrument.code == INSTRUMENT_CODE).first()
-    ok = False
-    if instrument:
-        ok = (
-            db.query(SurveyResponse)
-            .filter(
-                SurveyResponse.user_id == user.id,
-                SurveyResponse.instrument_id == instrument.id,
-                SurveyResponse.status == "submitted",
-                SurveyResponse.quality_passed.is_(True),
-            )
-            .first()
-            is not None
+    if instrument is None:
+        raise HTTPException(status_code=403, detail="请先完成并提交 BFI-44 问卷")
+    failed = (
+        db.query(SurveyResponse)
+        .filter(
+            SurveyResponse.user_id == user.id,
+            SurveyResponse.instrument_id == instrument.id,
+            SurveyResponse.status == "submitted",
+            SurveyResponse.quality_passed.is_(False),
         )
+        .first()
+    )
+    if failed:
+        raise HTTPException(
+            status_code=403,
+            detail="问卷质量检查未通过，请返回 BFI-44 重新作答后再进入博弈",
+        )
+    ok = (
+        db.query(SurveyResponse)
+        .filter(
+            SurveyResponse.user_id == user.id,
+            SurveyResponse.instrument_id == instrument.id,
+            SurveyResponse.status == "submitted",
+            SurveyResponse.quality_passed.is_(True),
+        )
+        .first()
+        is not None
+    )
     if not ok:
         raise HTTPException(status_code=403, detail="请先完成并提交 BFI-44 问卷")
 

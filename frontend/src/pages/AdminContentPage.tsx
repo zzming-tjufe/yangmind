@@ -1,34 +1,58 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api/client";
 import {
+  createAdminAnnouncement,
+  deleteAdminAnnouncement,
+  getAdminAnnouncements,
   getAdminContentBlocks,
   getAdminExperiments,
+  patchAdminAnnouncement,
   patchAdminContentBlock,
   patchScene,
+  type AdminAnnouncement,
   type AdminContentBlock,
   type AdminScene,
+  type AnnouncementKind,
+  type AnnouncementStatus,
 } from "../api/admin";
 import { useToast } from "../context/ToastContext";
 
-type Tab = "blocks" | "scenes";
+type Tab = "announcements" | "blocks" | "scenes";
 
 const BLOCK_LABELS: Record<string, string> = {
   "bfi.intro": "BFI 理论导读",
   "bfi.survey_hero": "BFI 作答页导语",
   "games.lobby": "博弈大厅",
   "rank.hero": "排行榜导语",
-  "announcement.banner": "平台公告",
+  "announcement.banner": "平台公告横幅",
+};
+
+const KIND_LABEL: Record<string, string> = {
+  notice: "测试通告",
+  changelog: "更新日志",
+};
+
+const emptyAnnForm = {
+  kind: "notice" as AnnouncementKind,
+  title: "",
+  body: "",
+  status: "draft" as AnnouncementStatus,
+  pinned: false,
 };
 
 export function AdminContentPage() {
   const { toast } = useToast();
-  const [tab, setTab] = useState<Tab>("blocks");
+  const [tab, setTab] = useState<Tab>("announcements");
   const [blocks, setBlocks] = useState<AdminContentBlock[]>([]);
   const [scenes, setScenes] = useState<AdminScene[]>([]);
+  const [announcements, setAnnouncements] = useState<AdminAnnouncement[]>([]);
   const [editBlock, setEditBlock] = useState<AdminContentBlock | null>(null);
   const [editScene, setEditScene] = useState<AdminScene | null>(null);
+  const [editAnn, setEditAnn] = useState<AdminAnnouncement | null>(null);
+  const [creatingAnn, setCreatingAnn] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [annForm, setAnnForm] = useState(emptyAnnForm);
   const [sceneForm, setSceneForm] = useState({
     title: "",
     short_desc: "",
@@ -40,9 +64,14 @@ export function AdminContentPage() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    const [b, exps] = await Promise.all([getAdminContentBlocks(), getAdminExperiments()]);
+    const [b, exps, anns] = await Promise.all([
+      getAdminContentBlocks(),
+      getAdminExperiments(),
+      getAdminAnnouncements(),
+    ]);
     setBlocks(b);
     setScenes(exps.flatMap((e) => e.scenes));
+    setAnnouncements(anns);
   }
 
   useEffect(() => {
@@ -70,6 +99,29 @@ export function AdminContentPage() {
       option_a_text: s.option_a_text,
       option_b_text: s.option_b_text,
     });
+  }
+
+  function openCreateAnn() {
+    setEditAnn(null);
+    setAnnForm(emptyAnnForm);
+    setCreatingAnn(true);
+  }
+
+  function openEditAnn(a: AdminAnnouncement) {
+    setCreatingAnn(false);
+    setEditAnn(a);
+    setAnnForm({
+      kind: (a.kind === "changelog" ? "changelog" : "notice") as AnnouncementKind,
+      title: a.title,
+      body: a.body,
+      status: (a.status === "published" ? "published" : "draft") as AnnouncementStatus,
+      pinned: a.pinned,
+    });
+  }
+
+  function closeAnnModal() {
+    setCreatingAnn(false);
+    setEditAnn(null);
   }
 
   async function saveBlock() {
@@ -102,17 +154,75 @@ export function AdminContentPage() {
     }
   }
 
+  async function saveAnn() {
+    if (!annForm.title.trim()) {
+      toast("请填写标题");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (creatingAnn) {
+        await createAdminAnnouncement({
+          kind: annForm.kind,
+          title: annForm.title.trim(),
+          body: annForm.body,
+          status: annForm.status,
+          pinned: annForm.pinned,
+        });
+        toast("公告已创建");
+      } else if (editAnn) {
+        await patchAdminAnnouncement(editAnn.id, {
+          kind: annForm.kind,
+          title: annForm.title.trim(),
+          body: annForm.body,
+          status: annForm.status,
+          pinned: annForm.pinned,
+        });
+        toast("公告已保存");
+      }
+      closeAnnModal();
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAnn(a: AdminAnnouncement) {
+    if (!window.confirm(`确认删除「${a.title}」？`)) return;
+    setBusy(true);
+    try {
+      await deleteAdminAnnouncement(a.id);
+      await load();
+      toast("已删除");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "删除失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const annModalOpen = creatingAnn || editAnn != null;
+
   return (
     <div className="page">
       <section className="hero card">
         <div>
           <div className="eyebrow">CONTENT CMS</div>
           <h2>内容管理</h2>
-          <p>编辑问卷说明、大厅文案、公告，以及博弈场景的标题与选项说明。</p>
+          <p>发布测试通告与更新日志，并编辑问卷说明、大厅文案与博弈场景文案。</p>
         </div>
       </section>
 
       <div className="cms-tabs">
+        <button
+          type="button"
+          className={tab === "announcements" ? "active" : ""}
+          onClick={() => setTab("announcements")}
+        >
+          公告栏
+        </button>
         <button
           type="button"
           className={tab === "blocks" ? "active" : ""}
@@ -129,11 +239,58 @@ export function AdminContentPage() {
         </button>
       </div>
 
+      {tab === "announcements" && (
+        <section className="card">
+          <div className="tablehead">
+            <h3>测试通告 / 更新日志</h3>
+            <button className="primary" type="button" onClick={openCreateAnn}>
+              新建公告
+            </button>
+          </div>
+          <div className="manage-list">
+            {announcements.map((a) => (
+              <div className="manage-item" key={a.id}>
+                <i>{a.kind === "changelog" ? "↺" : "!"}</i>
+                <div>
+                  <b>
+                    {a.pinned ? "[置顶] " : ""}
+                    {a.title}
+                  </b>
+                  <small>
+                    {KIND_LABEL[a.kind] || a.kind} ·{" "}
+                    {a.status === "published" ? "已发布" : "草稿"}
+                    {a.published_at
+                      ? ` · ${new Date(a.published_at).toLocaleString("zh-CN")}`
+                      : ""}
+                  </small>
+                </div>
+                <span className={`badge ${a.status === "published" ? "" : "warn"}`}>
+                  {a.status === "published" ? "已发布" : "草稿"}
+                </span>
+                <div className="actions">
+                  <button type="button" onClick={() => openEditAnn(a)}>
+                    编辑
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => removeAnn(a)}>
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+            {announcements.length === 0 && (
+              <div className="manage-item">暂无公告，点击右上角新建</div>
+            )}
+          </div>
+        </section>
+      )}
+
       {tab === "blocks" && (
         <section className="card">
           <div className="tablehead">
             <h3>内容块</h3>
-            <span style={{ fontSize: 12, color: "#999" }}>修改后参与端立即生效</span>
+            <span style={{ fontSize: 12, color: "#999" }}>
+              横幅公告与页面固定文案；修改后参与端立即生效
+            </span>
           </div>
           <div className="manage-list">
             {sortedBlocks.map((b) => (
@@ -186,6 +343,90 @@ export function AdminContentPage() {
             {scenes.length === 0 && <div className="manage-item">暂无场景</div>}
           </div>
         </section>
+      )}
+
+      {annModalOpen && (
+        <div className="profile-overlay" onClick={closeAnnModal}>
+          <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="profile-modal-head">
+              <div className="profile-person">
+                <i>!</i>
+                <div>
+                  <b>{creatingAnn ? "新建公告" : "编辑公告"}</b>
+                  <small>测试通告或更新日志</small>
+                </div>
+              </div>
+              <button type="button" onClick={closeAnnModal}>
+                ×
+              </button>
+            </div>
+            <div className="cms-form">
+              <label className="field">
+                类型
+                <select
+                  value={annForm.kind}
+                  onChange={(e) =>
+                    setAnnForm((f) => ({
+                      ...f,
+                      kind: e.target.value as AnnouncementKind,
+                    }))
+                  }
+                >
+                  <option value="notice">测试通告</option>
+                  <option value="changelog">更新日志</option>
+                </select>
+              </label>
+              <label className="field">
+                标题
+                <input
+                  value={annForm.title}
+                  onChange={(e) => setAnnForm((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="例如：本周测试安排 / v0.2 更新说明"
+                />
+              </label>
+              <label className="field">
+                正文
+                <textarea
+                  rows={8}
+                  value={annForm.body}
+                  onChange={(e) => setAnnForm((f) => ({ ...f, body: e.target.value }))}
+                  placeholder="支持多行。可写测试时间、注意事项或版本变更要点。"
+                />
+              </label>
+              <label className="field">
+                状态
+                <select
+                  value={annForm.status}
+                  onChange={(e) =>
+                    setAnnForm((f) => ({
+                      ...f,
+                      status: e.target.value as AnnouncementStatus,
+                    }))
+                  }
+                >
+                  <option value="draft">草稿（仅管理可见）</option>
+                  <option value="published">发布（参与端可见）</option>
+                </select>
+              </label>
+              <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={annForm.pinned}
+                  onChange={(e) => setAnnForm((f) => ({ ...f, pinned: e.target.checked }))}
+                />
+                置顶显示
+              </label>
+              <div className="cms-form-actions">
+                <button className="secondary" type="button" onClick={closeAnnModal}>
+                  取消
+                </button>
+                <button className="primary" type="button" disabled={busy} onClick={saveAnn}>
+                  {busy ? "保存中…" : "保存"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {editBlock && (

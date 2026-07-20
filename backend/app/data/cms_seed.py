@@ -23,15 +23,24 @@ DEFAULT_PAGES = [
         "audience": "participant",
         "sort_order": 3,
     },
+    {
+        "page_key": "notices",
+        "title": "公告栏",
+        "subtitle": "测试通告与版本更新日志",
+        "status": "published",
+        "audience": "participant",
+        "sort_order": 4,
+    },
 ]
 
 DEFAULT_CONTENT_BLOCKS = [
     {
         "block_key": "bfi.intro",
-        "title": "认识大五人格模型",
+        "title": "BFI-44 人格问卷",
         "body": (
-            "在开始作答前，请先阅读以下简要介绍，了解问卷所测量的五项人格维度。\n\n"
-            "人格特质没有绝对的好坏之分。本问卷结果仅用于本次研究中的行为分析，不作为临床诊断依据。"
+            "本问卷共 44 题，用于了解你在开放性、尽责性、外向性、宜人性与情绪敏感五个方面的稳定倾向。"
+            "作答约需 6–8 分钟，请按真实、日常的自己选择。\n\n"
+            "人格没有好坏之分。结果仅用于本次实验中的行为分析，不作为临床诊断。"
         ),
     },
     {

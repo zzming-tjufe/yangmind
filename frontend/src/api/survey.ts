@@ -47,3 +47,7 @@ export function saveAnswers(answers: { item_no: number; value: number }[]) {
 export function submitSurvey() {
   return api<MyResponse>("/api/v1/surveys/bfi-44/submit", { method: "POST" });
 }
+
+export function retakeSurvey() {
+  return api<MyResponse>("/api/v1/surveys/bfi-44/retake", { method: "POST" });
+}

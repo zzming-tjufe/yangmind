@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.roles import (
     INVITE_KIND_PARTICIPANT,
     INVITE_KIND_SUB,
+    INVITE_KINDS,
     ROLE_PARTICIPANT,
     ROLE_SUB,
 )
@@ -50,8 +51,8 @@ def _is_reserved_admin_identity(raw: str) -> bool:
     }
 
 
-def _consume_invite(db: Session, raw: str) -> InviteCode:
-    """原子扣减邀请码次数，避免并发超发。注册强制要求有效邀请码。"""
+def _load_valid_invite(db: Session, raw: str) -> InviteCode:
+    """校验邀请码可用性（不扣次数）。"""
     code = raw.strip().upper()
     if not code:
         raise HTTPException(status_code=400, detail="请填写邀请码")
@@ -61,12 +62,20 @@ def _consume_invite(db: Session, raw: str) -> InviteCode:
         raise HTTPException(status_code=400, detail="邀请码无效或已停用")
 
     kind = (invite.kind or INVITE_KIND_PARTICIPANT).strip()
+    if kind not in INVITE_KINDS:
+        raise HTTPException(status_code=400, detail="邀请码类型无效")
     if kind == INVITE_KIND_PARTICIPANT and invite.owner_id is None:
         raise HTTPException(
             status_code=400,
             detail="该员工邀请码尚未分配给子管理员，暂时无法使用",
         )
+    if invite.max_uses > 0 and invite.used_count >= invite.max_uses:
+        raise HTTPException(status_code=400, detail="邀请码已用完")
+    return invite
 
+
+def _consume_invite(db: Session, invite: InviteCode) -> InviteCode:
+    """原子扣减邀请码次数；与用户创建同事务，失败由调用方 rollback。"""
     filters = [
         InviteCode.id == invite.id,
         InviteCode.enabled.is_(True),
@@ -102,27 +111,23 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     if exists:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该邮箱已注册")
 
-    invite = _consume_invite(db, body.invite_code)
+    invite = _load_valid_invite(db, body.invite_code)
     kind = (invite.kind or INVITE_KIND_PARTICIPANT).strip()
-    if kind == INVITE_KIND_SUB:
-        role = ROLE_SUB
-    elif kind == INVITE_KIND_PARTICIPANT:
-        role = ROLE_PARTICIPANT
-    else:
-        raise HTTPException(status_code=400, detail="邀请码类型无效")
+    role = ROLE_SUB if kind == INVITE_KIND_SUB else ROLE_PARTICIPANT
 
-    user = User(
-        # The final public id is derived from the database-generated primary key.
-        # A unique placeholder lets concurrent inserts safely reach the first flush.
-        public_id=f"PENDING-{uuid4().hex}",
-        email=email,
-        password_hash=hash_password(body.password),
-        nickname=nickname,
-        role=role,
-        status="active",
-        invited_by_code_id=invite.id,
-    )
     try:
+        invite = _consume_invite(db, invite)
+        user = User(
+            # The final public id is derived from the database-generated primary key.
+            # A unique placeholder lets concurrent inserts safely reach the first flush.
+            public_id=f"PENDING-{uuid4().hex}",
+            email=email,
+            password_hash=hash_password(body.password),
+            nickname=nickname,
+            role=role,
+            status="active",
+            invited_by_code_id=invite.id,
+        )
         db.add(user)
         db.flush()
         user.public_id = _public_id_for_user(user.id)
@@ -130,16 +135,22 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
             AccountEvent(
                 user_id=user.id,
                 event_type="register",
-                detail=f"注册成功 · 邀请码 {invite.code} · 角色 {role}",
+                detail=f"使用邀请码 {invite.code} 注册成功，角色为{'子管理员' if role == ROLE_SUB else '参与者'}",
             )
         )
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
     except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="注册请求发生冲突，请重试；若邮箱已注册请直接登录",
         ) from None
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(user)
 
     token = create_access_token(user.id, user.password_hash)

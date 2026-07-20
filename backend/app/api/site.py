@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.roles import is_super_admin
-from app.models.cms import ContentBlock, PageConfig
+from app.models.cms import Announcement, ContentBlock, PageConfig
 from app.models.user import User
 
 router = APIRouter(prefix="/api/v1/site", tags=["site"])
@@ -24,6 +26,16 @@ class ContentOut(BaseModel):
     title: str
     body: str
     version: int
+
+
+class AnnouncementOut(BaseModel):
+    id: int
+    kind: str
+    title: str
+    body: str
+    pinned: bool
+    published_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @router.get("/pages", response_model=list[PageOut])
@@ -56,5 +68,34 @@ def list_content(
     rows = db.query(ContentBlock).order_by(ContentBlock.block_key).all()
     return [
         ContentOut(block_key=r.block_key, title=r.title, body=r.body, version=r.version)
+        for r in rows
+    ]
+
+
+@router.get("/announcements", response_model=list[AnnouncementOut])
+def list_announcements(
+    kind: str | None = Query(default=None, description="notice | changelog"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """参与端公告栏：仅已发布条目。"""
+    q = db.query(Announcement).filter(Announcement.status == "published")
+    if kind in ("notice", "changelog"):
+        q = q.filter(Announcement.kind == kind)
+    rows = q.order_by(
+        Announcement.pinned.desc(),
+        Announcement.published_at.desc().nullslast(),
+        Announcement.id.desc(),
+    ).all()
+    return [
+        AnnouncementOut(
+            id=r.id,
+            kind=r.kind,
+            title=r.title,
+            body=r.body,
+            pinned=r.pinned,
+            published_at=r.published_at,
+            updated_at=r.updated_at,
+        )
         for r in rows
     ]

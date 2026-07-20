@@ -1,4 +1,4 @@
-from app.models.cms import ContentBlock, PageConfig
+from app.models.cms import Announcement, ContentBlock, PageConfig
 from app.models.game import Experiment, ExperimentScene, GameRound, GameSession
 from app.models.survey import (
     PersonalityScore,
@@ -22,4 +22,5 @@ __all__ = [
     "GameRound",
     "PageConfig",
     "ContentBlock",
+    "Announcement",
 ]

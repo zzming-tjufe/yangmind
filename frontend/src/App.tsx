@@ -10,6 +10,7 @@ import { AdminPagesPage } from "./pages/AdminPagesPage";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { BfiPage } from "./pages/BfiPage";
 import { GamesPage } from "./pages/GamesPage";
+import { NoticesPage } from "./pages/NoticesPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { RankPage } from "./pages/RankPage";
 
@@ -53,6 +54,9 @@ export default function App() {
     case "rank":
       content = <RankPage />;
       break;
+    case "notices":
+      content = <NoticesPage />;
+      break;
     case "profile":
       content = <ProfilePage />;
       break;
@@ -80,7 +84,10 @@ export default function App() {
       previewingUserUi={previewingUserUi}
       onToggleUserPreview={toggleUserPreview}
     >
-      <div className={previewingUserUi ? "user-preview-content" : undefined}>
+      <div
+        key={view}
+        className={`page-soft-in${previewingUserUi ? " user-preview-content" : ""}`}
+      >
         {content}
       </div>
     </AppShell>

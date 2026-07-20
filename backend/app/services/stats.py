@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.roles import ROLE_PARTICIPANT, STAFF_ROLES
 from app.models.game import GameRound, GameSession
 from app.models.survey import PersonalityScore, SurveyResponse
 from app.models.user import User
@@ -57,15 +59,29 @@ def survey_status_for_user(db: Session, user_id: int) -> str:
     return "已完成" if submitted else "未完成"
 
 
-def build_leaderboard_rows(db: Session, period: str = "all") -> list[dict]:
-    since = current_week_start_utc() if period == "weekly" else None
-    users = (
+def _leaderboard_eligible_users(db: Session) -> list[User]:
+    """排行榜仅统计普通参与者：排除总管 / 子管 / 旧 admin，以及系统总管邮箱。"""
+    seed_email = settings.seed_admin_email.lower().strip()
+    return (
         db.query(User)
-        .filter(User.role == "participant", User.status == "active")
+        .filter(
+            User.status == "active",
+            User.role == ROLE_PARTICIPANT,
+            User.role.notin_(tuple(STAFF_ROLES)),
+            func.lower(User.email) != seed_email,
+        )
         .all()
     )
+
+
+def build_leaderboard_rows(db: Session, period: str = "all") -> list[dict]:
+    since = current_week_start_utc() if period == "weekly" else None
+    users = _leaderboard_eligible_users(db)
     rows = []
     for u in users:
+        # 双保险：角色若被误标成管理侧，绝不进榜
+        if u.role != ROLE_PARTICIPANT or u.role in STAFF_ROLES:
+            continue
         total, sessions = user_game_stats(db, u.id, since=since)
         if period == "weekly" and sessions == 0:
             continue

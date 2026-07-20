@@ -19,7 +19,7 @@ from app.core.roles import (
 from app.core.security import hash_password
 from app.data.personality_meta import PERSONALITY_META, personality_band
 from app.models.admin_extra import AccountEvent, InviteCode
-from app.models.cms import ContentBlock, PageConfig
+from app.models.cms import Announcement, ContentBlock, PageConfig
 from app.models.game import Experiment, ExperimentScene, GameRound, GameSession
 from app.models.survey import SurveyAnswer, SurveyResponse
 from app.models.user import User
@@ -118,10 +118,11 @@ def set_user_status(
     user = db.get(User, user_id)
     assert_can_manage_participant(db, admin, user)
     user.status = body.status
+    status_label = "正常启用" if body.status == "active" else "已禁用"
     _log_event(
         db,
         event_type="admin_status_change",
-        detail=f"{user.public_id} -> {body.status}",
+        detail=f"将 {user.nickname}（{user.public_id}）设为{status_label}",
         user_id=user.id,
         actor_id=admin.id,
     )
@@ -147,7 +148,7 @@ def reset_user_password(
     _log_event(
         db,
         event_type="admin_reset_password",
-        detail=f"重置 {user.public_id} 密码",
+        detail=f"重置了 {user.nickname}（{user.public_id}）的登录密码",
         user_id=user.id,
         actor_id=admin.id,
     )
@@ -505,6 +506,152 @@ def admin_patch_content(
     )
 
 
+# ---------- 公告栏（测试通告 / 更新日志） ----------
+
+
+class AnnouncementAdminOut(BaseModel):
+    id: int
+    kind: str
+    title: str
+    body: str
+    status: str
+    pinned: bool
+    published_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AnnouncementCreate(BaseModel):
+    kind: str = Field(default="notice", description="notice | changelog")
+    title: str = Field(min_length=1, max_length=200)
+    body: str = ""
+    status: str = Field(default="draft", description="published | draft")
+    pinned: bool = False
+
+
+class AnnouncementPatch(BaseModel):
+    kind: str | None = None
+    title: str | None = None
+    body: str | None = None
+    status: str | None = None
+    pinned: bool | None = None
+
+
+def _announcement_out(row: Announcement) -> AnnouncementAdminOut:
+    return AnnouncementAdminOut(
+        id=row.id,
+        kind=row.kind,
+        title=row.title,
+        body=row.body,
+        status=row.status,
+        pinned=row.pinned,
+        published_at=row.published_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _normalize_announcement_kind(kind: str) -> str:
+    k = (kind or "").strip().lower()
+    if k not in ("notice", "changelog"):
+        raise HTTPException(status_code=400, detail="类型须为 notice 或 changelog")
+    return k
+
+
+def _normalize_announcement_status(status: str) -> str:
+    s = (status or "").strip().lower()
+    if s not in ("published", "draft"):
+        raise HTTPException(status_code=400, detail="状态须为 published 或 draft")
+    return s
+
+
+@router.get("/announcements", response_model=list[AnnouncementAdminOut])
+def admin_list_announcements(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_super_admin),
+):
+    rows = db.query(Announcement).order_by(
+        Announcement.pinned.desc(),
+        Announcement.published_at.desc().nullslast(),
+        Announcement.id.desc(),
+    ).all()
+    return [_announcement_out(r) for r in rows]
+
+
+@router.post("/announcements", response_model=AnnouncementAdminOut)
+def admin_create_announcement(
+    body: AnnouncementCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_super_admin),
+):
+    kind = _normalize_announcement_kind(body.kind)
+    status = _normalize_announcement_status(body.status)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+    row = Announcement(
+        kind=kind,
+        title=title,
+        body=(body.body or "").strip(),
+        status=status,
+        pinned=bool(body.pinned),
+        published_at=datetime.now(UTC) if status == "published" else None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _announcement_out(row)
+
+
+@router.patch("/announcements/{announcement_id}", response_model=AnnouncementAdminOut)
+def admin_patch_announcement(
+    announcement_id: int,
+    body: AnnouncementPatch,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_super_admin),
+):
+    row = db.get(Announcement, announcement_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    if body.kind is not None:
+        row.kind = _normalize_announcement_kind(body.kind)
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        row.title = title
+    if body.body is not None:
+        row.body = body.body.strip()
+    if body.pinned is not None:
+        row.pinned = bool(body.pinned)
+    if body.status is not None:
+        status = _normalize_announcement_status(body.status)
+        was_published = row.status == "published"
+        row.status = status
+        if status == "published" and (not was_published or row.published_at is None):
+            row.published_at = datetime.now(UTC)
+        if status == "draft":
+            # 下架时保留 published_at，便于重新发布时仍显示原发布时间；也可清空
+            pass
+    db.commit()
+    db.refresh(row)
+    return _announcement_out(row)
+
+
+@router.delete("/announcements/{announcement_id}")
+def admin_delete_announcement(
+    announcement_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_super_admin),
+):
+    row = db.get(Announcement, announcement_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 # ---------- 邀请码 / 账号事件 ----------
 
 
@@ -610,10 +757,16 @@ def create_invite(
         enabled=True,
     )
     db.add(row)
+    kind_label = "子管邀请码" if kind == INVITE_KIND_SUB else "员工邀请码"
+    owner_part = ""
+    if owner_id is not None:
+        owner = db.get(User, owner_id)
+        owner_part = f"，已分配给 {owner.nickname}" if owner else f"，已分配给用户#{owner_id}"
     _log_event(
         db,
         event_type="invite_created",
-        detail=f"{code} kind={kind} owner={owner_id}",
+        detail=f"创建{kind_label} {code}{owner_part}"
+        + (f"（上限 {body.max_uses} 次）" if body.max_uses > 0 else "（不限次数）"),
         actor_id=admin.id,
     )
     db.commit()
@@ -640,10 +793,16 @@ def assign_invite(
         if owner is None or owner.role != ROLE_SUB:
             raise HTTPException(status_code=400, detail="只能分配给子管理员")
     row.owner_id = owner_id
+    if owner_id is None:
+        assign_detail = f"取消了邀请码 {row.code} 的子管归属"
+    else:
+        owner = db.get(User, owner_id)
+        name = owner.nickname if owner else f"用户#{owner_id}"
+        assign_detail = f"将员工邀请码 {row.code} 分配给子管 {name}"
     _log_event(
         db,
         event_type="invite_assigned",
-        detail=f"{row.code} -> owner={owner_id}",
+        detail=assign_detail,
         actor_id=admin.id,
     )
     db.commit()
@@ -665,7 +824,7 @@ def toggle_invite(
     _log_event(
         db,
         event_type="invite_toggled",
-        detail=f"{row.code} -> {enabled}",
+        detail=f"{'启用' if enabled else '停用'}了邀请码 {row.code}",
         actor_id=admin.id,
     )
     db.commit()
@@ -675,10 +834,73 @@ def toggle_invite(
 class AccountEventOut(BaseModel):
     id: int
     event_type: str
+    title: str
     detail: str
     user_id: int | None
     actor_id: int | None
     created_at: datetime | None
+
+
+_EVENT_TITLES = {
+    "register": "用户注册",
+    "change_password": "修改密码",
+    "admin_status_change": "账号状态变更",
+    "admin_reset_password": "重置密码",
+    "invite_created": "创建邀请码",
+    "invite_assigned": "分配邀请码",
+    "invite_toggled": "启停邀请码",
+}
+
+
+def _humanize_event_detail(event_type: str, detail: str) -> str:
+    """把历史英文/符号明细尽量转成可读中文；新写入的中文明细原样返回。"""
+    text = (detail or "").strip()
+    if not text:
+        return "无更多说明"
+
+    # 已是中文为主的新格式
+    if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        return text
+
+    if event_type == "admin_status_change" and "->" in text:
+        left, right = [p.strip() for p in text.split("->", 1)]
+        status = "正常启用" if right == "active" else "已禁用" if right == "disabled" else right
+        return f"将 {left} 设为{status}"
+
+    if event_type == "admin_reset_password":
+        return text.replace("重置", "重置了").replace(" 密码", " 的登录密码")
+
+    if event_type == "invite_created":
+        # YM2026 kind=participant owner=3
+        parts = text.split()
+        code = parts[0] if parts else text
+        kind = "员工邀请码"
+        owner = ""
+        for p in parts[1:]:
+            if p.startswith("kind="):
+                kind = "子管邀请码" if p.endswith("sub_admin") else "员工邀请码"
+            if p.startswith("owner=") and p != "owner=None":
+                owner = f"，归属用户#{p.split('=', 1)[1]}"
+        return f"创建{kind} {code}{owner}"
+
+    if event_type == "invite_assigned" and "->" in text:
+        left, right = [p.strip() for p in text.split("->", 1)]
+        code = left.split()[0] if left else left
+        if "None" in right or right.endswith("owner=None"):
+            return f"取消了邀请码 {code} 的子管归属"
+        oid = right.split("=")[-1]
+        return f"将邀请码 {code} 分配给用户#{oid}"
+
+    if event_type == "invite_toggled" and "->" in text:
+        left, right = [p.strip() for p in text.split("->", 1)]
+        code = left.split()[0] if left else left
+        on = right.lower() in {"true", "1", "yes"}
+        return f"{'启用' if on else '停用'}了邀请码 {code}"
+
+    if event_type == "register":
+        return text.replace("注册成功", "完成注册")
+
+    return text
 
 
 @router.get("/account-events", response_model=list[AccountEventOut])
@@ -692,7 +914,8 @@ def list_events(
         AccountEventOut(
             id=r.id,
             event_type=r.event_type,
-            detail=r.detail,
+            title=_EVENT_TITLES.get(r.event_type, r.event_type),
+            detail=_humanize_event_detail(r.event_type, r.detail),
             user_id=r.user_id,
             actor_id=r.actor_id,
             created_at=r.created_at,

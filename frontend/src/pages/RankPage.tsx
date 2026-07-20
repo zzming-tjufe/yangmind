@@ -29,7 +29,7 @@ export function RankPage() {
 
   return (
     <div className="page">
-      <section className="hero card">
+      <section className="hero card page-soft-in">
         <div>
           <div className="eyebrow">
             {period === "weekly" ? "WEEKLY LEADERBOARD" : "ALL-TIME LEADERBOARD"}
@@ -87,8 +87,12 @@ export function RankPage() {
           </div>
         )}
         {!loading &&
-          filtered.map((u) => (
-            <div className="row rank-row" key={u.public_id}>
+          filtered.map((u, i) => (
+            <div
+              className="row rank-row rank-row-in"
+              key={`${period}-${u.public_id}`}
+              style={{ animationDelay: `${Math.min(i, 12) * 0.04}s` }}
+            >
               <span className="user">
                 <i>{u.nickname.slice(0, 1)}</i>
                 <b>{u.nickname}</b>

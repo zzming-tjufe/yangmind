@@ -35,7 +35,30 @@ def _survey_submitted(db: Session, user_id: int) -> bool:
     )
 
 
+def _survey_quality_failed(db: Session, user_id: int) -> bool:
+    """已提交但质量检查未通过（卡在不可重答前的状态）。"""
+    instrument = db.query(SurveyInstrument).filter(SurveyInstrument.code == INSTRUMENT_CODE).first()
+    if instrument is None:
+        return False
+    return (
+        db.query(SurveyResponse)
+        .filter(
+            SurveyResponse.user_id == user_id,
+            SurveyResponse.instrument_id == instrument.id,
+            SurveyResponse.status == "submitted",
+            SurveyResponse.quality_passed.is_(False),
+        )
+        .first()
+        is not None
+    )
+
+
 def _require_survey(db: Session, user: User) -> None:
+    if _survey_quality_failed(db, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="问卷质量检查未通过，请返回 BFI-44 重新作答后再进入博弈",
+        )
     if not _survey_submitted(db, user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -116,6 +139,7 @@ def list_stag_scenes(
     """场景列表 + 个人完成进度。"""
     experiment = _get_stag_experiment(db)
     survey_done = _survey_submitted(db, current_user.id)
+    survey_quality_failed = _survey_quality_failed(db, current_user.id)
     unlocked = survey_done and experiment.status == "active"
     best = _finished_scene_keys(db, current_user.id, experiment.id)
     scenes_sorted = sorted(
@@ -133,6 +157,7 @@ def list_stag_scenes(
         rounds_per_scene=experiment.rounds_per_scene,
         unlock_games=unlocked,
         survey_done=survey_done,
+        survey_quality_failed=survey_quality_failed,
         experiment_status=experiment.status,
         done_count=done,
         required_count=required,

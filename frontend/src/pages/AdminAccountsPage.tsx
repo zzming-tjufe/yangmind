@@ -256,13 +256,27 @@ export function AdminAccountsPage() {
           <div className="tablehead">
             <h3>账号事件</h3>
           </div>
+          <div className="row header event-row">
+            <span>事件</span>
+            <span>时间</span>
+          </div>
           {events.map((ev) => (
             <div className="row event-row" key={ev.id}>
-              <span>
-                <b>{ev.event_type}</b>
-                {ev.detail ? ` · ${ev.detail}` : ""}
+              <span className="event-copy">
+                <b>{ev.title || ev.event_type}</b>
+                <small>{ev.detail || "无更多说明"}</small>
               </span>
-              <span>{ev.created_at ? new Date(ev.created_at).toLocaleString() : ""}</span>
+              <span className="event-time">
+                {ev.created_at
+                  ? new Date(ev.created_at).toLocaleString("zh-CN", {
+                      year: "numeric",
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : "—"}
+              </span>
             </div>
           ))}
           {events.length === 0 && (

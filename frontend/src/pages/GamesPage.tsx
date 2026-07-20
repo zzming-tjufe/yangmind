@@ -178,11 +178,13 @@ export function GamesPage() {
   async function enterStag() {
     if (!progress?.unlock_games) {
       toast(
-        !progress?.survey_done
-          ? "请先完成 BFI-44 问卷"
-          : progress?.experiment_status !== "active"
-            ? "实验暂未开放"
-            : "当前无法开始",
+        progress?.survey_quality_failed
+          ? "问卷质量检查未通过，请返回 BFI-44 重新作答"
+          : !progress?.survey_done
+            ? "请先完成 BFI-44 问卷"
+            : progress?.experiment_status !== "active"
+              ? "实验暂未开放"
+              : "当前无法开始",
       );
       return;
     }
@@ -281,24 +283,28 @@ export function GamesPage() {
   if (stage === "lobby") {
     const lobby = content["games.lobby"];
     return (
-      <div className="page">
+      <div className="page page-soft-in">
         {!progress?.unlock_games && (
           <div className="alert">
             <i>!</i>
             <div>
               <b>
-                {!progress?.survey_done
-                  ? "博弈入口暂未解锁"
-                  : progress?.experiment_status !== "active"
-                    ? "实验暂未开放"
-                    : "博弈入口暂未解锁"}
+                {progress?.survey_quality_failed
+                  ? "问卷质量检查未通过"
+                  : !progress?.survey_done
+                    ? "博弈入口暂未解锁"
+                    : progress?.experiment_status !== "active"
+                      ? "实验暂未开放"
+                      : "博弈入口暂未解锁"}
               </b>
               <small>
-                {!progress?.survey_done
-                  ? "完成 BFI-44 问卷后即可进入全部实验。"
-                  : progress?.experiment_status !== "active"
-                    ? "管理员已关闭本实验，请稍后再试或联系实验组织者。"
-                    : "当前无法开始新对局。"}
+                {progress?.survey_quality_failed
+                  ? "请返回「BFI-44 问卷」点击重新作答。通过质量检查后即可进入实验。"
+                  : !progress?.survey_done
+                    ? "完成 BFI-44 问卷后即可进入全部实验。"
+                    : progress?.experiment_status !== "active"
+                      ? "管理员已关闭本实验，请稍后再试或联系实验组织者。"
+                      : "当前无法开始新对局。"}
               </small>
             </div>
           </div>
@@ -354,7 +360,11 @@ export function GamesPage() {
                 </span>
               </div>
               <button className="primary" type="button" onClick={enterStag}>
-                {progress?.unlock_games ? "选择场景 →" : "完成问卷后解锁 →"}
+                {progress?.unlock_games
+                  ? "选择场景 →"
+                  : progress?.survey_quality_failed
+                    ? "需重新作答问卷 →"
+                    : "完成问卷后解锁 →"}
               </button>
             </div>
           </article>
@@ -365,7 +375,7 @@ export function GamesPage() {
 
   if (stage === "scenes" && progress) {
     return (
-      <div className="page">
+      <div className="page page-soft-in">
         <button className="backbtn" type="button" onClick={() => setStage("lobby")}>
           ← 返回博弈大厅
         </button>
@@ -426,7 +436,7 @@ export function GamesPage() {
   if (stage === "matching" && pvp) {
     const spinDeg = ((waitSec % 12) / 12) * 360;
     return (
-      <div className="page">
+      <div className="page page-soft-in">
         <section className="hero card matchmaking-hero">
           <div>
             <div className="eyebrow">MATCHMAKING</div>
@@ -470,7 +480,7 @@ export function GamesPage() {
 
   if (stage === "matched" && pvp) {
     return (
-      <div className="page">
+      <div className="page page-soft-in">
         <section className="hero card match-found-hero">
           <div>
             <div className="eyebrow">MATCH FOUND</div>
@@ -490,7 +500,7 @@ export function GamesPage() {
   if (stage === "pvp" && scene && pvp) {
     if (pvp.status === "finished") {
       return (
-        <div className="page">
+        <div className="page page-soft-in">
           <section className="finish card">
             <div className="trophy">✦</div>
             <div className="eyebrow" style={{ justifyContent: "center", marginTop: 20 }}>
@@ -579,17 +589,21 @@ export function GamesPage() {
           <div className="scoreboard">
             <div className="scorebox">
               <span>你的累计得分</span>
-              <b>{pvp.my_score}</b>
+              <b key={`me-${pvp.my_score}`} className="score-bump">
+                {pvp.my_score}
+              </b>
             </div>
             <div className="versus">VS</div>
             <div className="scorebox">
               <span>{pvp.opponent_nickname || "对方"}</span>
-              <b>{pvp.opponent_score}</b>
+              <b key={`op-${pvp.opponent_score}`} className="score-bump">
+                {pvp.opponent_score}
+              </b>
             </div>
           </div>
 
           {history[0] && (
-            <div className="last-result">
+            <div className="last-result result-flash" key={history[0].round_no}>
               上一轮：你 <b>{history[0].my_timed_out ? "超时" : history[0].my_choice}</b>，对方{" "}
               <b>{history[0].opponent_timed_out ? "超时" : history[0].opponent_choice}</b>
               。你得 <b>{history[0].my_points}</b>，对方得 <b>{history[0].opponent_points}</b>。

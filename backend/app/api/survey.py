@@ -50,6 +50,11 @@ def _get_or_create_draft(db: Session, user: User, instrument: SurveyInstrument) 
         .first()
     )
     if submitted:
+        if submitted.quality_passed is False:
+            raise HTTPException(
+                status_code=400,
+                detail="上次作答未通过质量检查，请先重新作答",
+            )
         raise HTTPException(status_code=400, detail="你已提交过 BFI-44，不能再修改答案")
 
     drafts = (
@@ -95,6 +100,11 @@ def _get_or_create_draft(db: Session, user: User, instrument: SurveyInstrument) 
         if existing is None:
             raise
         if existing.status == "submitted":
+            if existing.quality_passed is False:
+                raise HTTPException(
+                    status_code=400,
+                    detail="上次作答未通过质量检查，请先重新作答",
+                )
             raise HTTPException(status_code=400, detail="你已提交过 BFI-44，不能再修改答案")
         return existing
     db.refresh(draft)
@@ -241,6 +251,11 @@ def submit(
         .first()
     )
     if already:
+        if already.quality_passed is False:
+            raise HTTPException(
+                status_code=400,
+                detail="上次作答未通过质量检查，请先重新作答后再提交",
+            )
         raise HTTPException(status_code=400, detail="你已提交过 BFI-44")
 
     draft = (
@@ -310,4 +325,49 @@ def submit(
         personality=PersonalityScoreOut.model_validate(draft.personality_score),
         quality_passed=draft.quality_passed,
         unlock_games=draft.quality_passed is True,
+    )
+
+
+@router.post("/bfi-44/retake", response_model=MyResponseOut)
+def retake(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """质量检查未通过时允许清空并重新作答（质量已通过不可重答）。"""
+    instrument = _get_instrument(db)
+    response = (
+        db.query(SurveyResponse)
+        .options(
+            joinedload(SurveyResponse.answers),
+            joinedload(SurveyResponse.personality_score),
+        )
+        .filter(
+            SurveyResponse.user_id == current_user.id,
+            SurveyResponse.instrument_id == instrument.id,
+        )
+        .order_by(SurveyResponse.id.desc())
+        .first()
+    )
+    if response is None:
+        raise HTTPException(status_code=400, detail="还没有问卷记录")
+    if response.status != "submitted":
+        raise HTTPException(status_code=400, detail="当前无需重新作答")
+    if response.quality_passed is True:
+        raise HTTPException(status_code=400, detail="质量检查已通过，不能重新作答")
+
+    db.query(PersonalityScore).filter(PersonalityScore.response_id == response.id).delete()
+    db.query(SurveyAnswer).filter(SurveyAnswer.response_id == response.id).delete()
+    response.status = "in_progress"
+    response.submitted_at = None
+    response.quality_passed = None
+    response.quality_flags = None
+    db.commit()
+
+    return MyResponseOut(
+        status="in_progress",
+        answered_count=0,
+        answers={},
+        personality=None,
+        quality_passed=None,
+        unlock_games=False,
     )

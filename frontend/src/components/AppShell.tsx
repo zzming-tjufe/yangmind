@@ -2,11 +2,13 @@ import { useEffect, type ReactNode } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useSitePages } from "../hooks/useSite";
 import { isStaff, isSubAdmin, isSuperAdmin } from "../lib/roles";
+import { AnnouncementBell } from "./AnnouncementBell";
 
 type View =
   | "bfi"
   | "games"
   | "rank"
+  | "notices"
   | "profile"
   | "users"
   | "experiments"
@@ -40,6 +42,7 @@ const fallbackTitles: Record<View, [string, string]> = {
   bfi: ["BFI-44 人格问卷", "完成问卷后即可解锁全部博弈实验"],
   games: ["博弈 PK", "选择实验，观察你的合作与决策模式"],
   rank: ["排行榜", "看看本周谁最擅长建立合作"],
+  notices: ["公告栏", "测试通告与版本更新日志"],
   profile: ["我的账号", "查看资料并自行修改登录密码"],
   users: ["用户数据", "掌握参与情况、得分与人格结果"],
   experiments: ["博弈实验", "配置、排序并维护实验项目"],
@@ -74,12 +77,14 @@ export function AppShell({
 
   const staffNav = superAdmin ? superAdminNav : subAdmin ? subAdminNav : [];
   const items = showParticipantUi
-    ? [...userNavBase.filter((item) => {
-        if (item.id === "profile") return true;
-        const cfg = byKey[item.id];
-        if (!pages.length) return true;
-        return cfg?.status === "published";
-      })]
+    ? [
+        ...userNavBase.filter((item) => {
+          if (item.id === "profile") return true;
+          const cfg = byKey[item.id];
+          if (!pages.length) return true;
+          return cfg?.status === "published";
+        }),
+      ]
     : staffNav;
 
   const pageCfg = byKey[view];
@@ -92,7 +97,10 @@ export function AppShell({
     const allowed = new Set(
       pages.filter((p) => p.status === "published").map((p) => p.page_key),
     );
-    if (!allowed.has(view) && (view === "bfi" || view === "games" || view === "rank")) {
+    if (
+      !allowed.has(view) &&
+      (view === "bfi" || view === "games" || view === "rank" || view === "notices")
+    ) {
       const first = userNavBase.find((n) => allowed.has(n.id));
       if (first) onNavigate(first.id);
     }
@@ -182,12 +190,17 @@ export function AppShell({
             <h1 id="page-title">{title}</h1>
             <p id="page-sub">{sub}</p>
           </div>
-          {previewingUserUi ? (
-            <div className="preview-status" role="status">
-              <span>只读预览</span>
-              <button type="button" onClick={onToggleUserPreview}>返回管理后台</button>
-            </div>
-          ) : null}
+          <div className="topbar-actions">
+            {!previewingUserUi ? <AnnouncementBell /> : null}
+            {previewingUserUi ? (
+              <div className="preview-status" role="status">
+                <span>只读预览</span>
+                <button type="button" onClick={onToggleUserPreview}>
+                  返回管理后台
+                </button>
+              </div>
+            ) : null}
+          </div>
         </header>
         <div className="content" id="content">
           {children}

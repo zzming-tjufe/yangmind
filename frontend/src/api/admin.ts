@@ -100,6 +100,7 @@ export type SubAdmin = {
 export type AccountEvent = {
   id: number;
   event_type: string;
+  title?: string;
   detail: string;
   user_id: number | null;
   actor_id: number | null;
@@ -213,6 +214,66 @@ export function patchAdminContentBlock(id: number, body: { title?: string; body?
     method: "PATCH",
     json: body,
   });
+}
+
+export type AnnouncementKind = "notice" | "changelog";
+export type AnnouncementStatus = "published" | "draft";
+
+export type SiteAnnouncement = {
+  id: number;
+  kind: AnnouncementKind | string;
+  title: string;
+  body: string;
+  pinned: boolean;
+  published_at: string | null;
+  updated_at: string | null;
+};
+
+export type AdminAnnouncement = SiteAnnouncement & {
+  status: AnnouncementStatus | string;
+  created_at: string | null;
+};
+
+export function getSiteAnnouncements(kind?: AnnouncementKind) {
+  const q = kind ? `?kind=${kind}` : "";
+  return api<SiteAnnouncement[]>(`/api/v1/site/announcements${q}`);
+}
+
+export function getAdminAnnouncements() {
+  return api<AdminAnnouncement[]>("/api/v1/admin/announcements");
+}
+
+export function createAdminAnnouncement(body: {
+  kind: AnnouncementKind;
+  title: string;
+  body?: string;
+  status?: AnnouncementStatus;
+  pinned?: boolean;
+}) {
+  return api<AdminAnnouncement>("/api/v1/admin/announcements", {
+    method: "POST",
+    json: body,
+  });
+}
+
+export function patchAdminAnnouncement(
+  id: number,
+  body: {
+    kind?: AnnouncementKind;
+    title?: string;
+    body?: string;
+    status?: AnnouncementStatus;
+    pinned?: boolean;
+  },
+) {
+  return api<AdminAnnouncement>(`/api/v1/admin/announcements/${id}`, {
+    method: "PATCH",
+    json: body,
+  });
+}
+
+export function deleteAdminAnnouncement(id: number) {
+  return api<{ ok: boolean }>(`/api/v1/admin/announcements/${id}`, { method: "DELETE" });
 }
 
 export type SitePage = {

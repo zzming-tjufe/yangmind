@@ -72,20 +72,42 @@ export function AuthPage() {
   return (
     <section id="auth">
       <div className="auth-visual">
-        <div className="brand">
+        <div className="auth-ambient" aria-hidden>
+          <i />
+          <i />
+        </div>
+        <div className="auth-float-words" aria-hidden>
+          <span className="auth-reveal" style={{ ["--d" as string]: "200ms" }}>
+            合作
+          </span>
+          <span className="auth-reveal" style={{ ["--d" as string]: "480ms" }}>
+            信任
+          </span>
+          <span className="auth-reveal" style={{ ["--d" as string]: "760ms" }}>
+            人格
+          </span>
+        </div>
+        <div className="brand auth-reveal" style={{ ["--d" as string]: "80ms" }}>
           <i>YM</i>
           <strong>YangMind Lab</strong>
         </div>
         <div className="copy">
-          <div className="eyebrow">行为科学实验平台</div>
-          <h1>
+          <div className="eyebrow auth-reveal" style={{ ["--d" as string]: "320ms" }}>
+            行为科学实验平台
+          </div>
+          <h1 className="auth-reveal" style={{ ["--d" as string]: "560ms" }}>
             在选择之间，
             <br />
             看见合作的可能。
           </h1>
-          <p>连接人格测量与策略博弈，让每一次决策都成为理解合作行为的线索。</p>
+          <p className="auth-reveal" style={{ ["--d" as string]: "880ms" }}>
+            连接人格测量与策略博弈，让每一次决策都成为理解合作行为的线索。
+          </p>
+          
         </div>
-        <div className="copyright">© 2026 YangMind Lab · 行为与人格研究中心</div>
+        <div className="copyright auth-reveal" style={{ ["--d" as string]: "1180ms" }}>
+          © 2026 YangMind Lab · v0.3.0
+        </div>
       </div>
       <div className="auth-panel">
         <div className="auth-flip-scene">
@@ -113,7 +135,7 @@ export function AuthPage() {
                 账号 / 邮箱
                 <input
                   type="text"
-                  placeholder="管理员可填 admin，或输入邮箱"
+                  placeholder="请输入注册邮箱"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"
@@ -128,6 +150,9 @@ export function AuthPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="current-password"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submit("login");
+                    }}
                   />
                   <button
                     type="button"
@@ -196,6 +221,9 @@ export function AuthPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="new-password"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submit("register");
+                    }}
                   />
                   <button
                     type="button"
@@ -214,6 +242,9 @@ export function AuthPage() {
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
                   required
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submit("register");
+                  }}
                 />
               </label>
               <button
