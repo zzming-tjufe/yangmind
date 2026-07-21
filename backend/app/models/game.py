@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 from app.core.database import Base
 
@@ -78,3 +79,23 @@ class GameRound(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     session: Mapped["GameSession"] = relationship(back_populates="rounds")
+
+
+class GameComprehension(Base):
+    """参与者进入真人匹配前的规则理解检查。"""
+
+    __tablename__ = "game_comprehension"
+    __table_args__ = (
+        UniqueConstraint("user_id", "experiment_id", name="uq_game_comprehension_user_exp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    experiment_id: Mapped[int] = mapped_column(ForeignKey("experiments.id"), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_incorrect_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    passed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

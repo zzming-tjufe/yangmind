@@ -59,3 +59,19 @@ class PvpRound(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     match: Mapped["PvpMatch"] = relationship(back_populates="rounds")
+
+
+class PvpDecisionTelemetry(Base):
+    """每轮每位真人参与者首次提交选择的反应时。"""
+
+    __tablename__ = "pvp_decision_telemetry"
+    __table_args__ = (
+        UniqueConstraint("match_id", "round_no", "user_id", name="uq_pvp_decision_user_round"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("pvp_matches.id"), index=True)
+    round_no: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    decision_ms: Mapped[int] = mapped_column(Integer)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

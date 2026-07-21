@@ -2,6 +2,7 @@ import random
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, joinedload
 
@@ -10,18 +11,34 @@ from app.core.database import get_db
 from app.data.bfi44_seed import INSTRUMENT_CODE
 from app.data.stag_hunt_seed import ROUNDS_PER_SCENE, STAG_HUNT_CODE
 from app.models.game import Experiment, ExperimentScene, GameRound, GameSession
+from app.models.match import PvpMatch
 from app.models.survey import SurveyInstrument, SurveyResponse
 from app.models.user import User
-from app.schemas.game import PlayRoundRequest, SceneOut, SessionOut, StagHuntProgressOut, RoundOut
+from app.schemas.game import (
+    ComprehensionOut,
+    ComprehensionSubmitRequest,
+    PlayRoundRequest,
+    RoundOut,
+    SceneOut,
+    SessionOut,
+    StagHuntProgressOut,
+)
+from app.services.game_comprehension import (
+    COMPREHENSION_QUESTIONS,
+    CORRECT_ANSWERS,
+    comprehension_passed,
+    get_comprehension,
+    submit_comprehension,
+)
 from app.services.game_engine import bot_choice, calc_payoff
 
 router = APIRouter(prefix="/api/v1", tags=["games"])
 
 
-def _survey_submitted(db: Session, user_id: int) -> bool:
+def _submitted_survey(db: Session, user_id: int) -> SurveyResponse | None:
     instrument = db.query(SurveyInstrument).filter(SurveyInstrument.code == INSTRUMENT_CODE).first()
     if instrument is None:
-        return False
+        return None
     return (
         db.query(SurveyResponse)
         .filter(
@@ -30,15 +47,24 @@ def _survey_submitted(db: Session, user_id: int) -> bool:
             SurveyResponse.status == "submitted",
         )
         .first()
-        is not None
     )
 
 
+def _survey_submitted(db: Session, user_id: int) -> bool:
+    return _submitted_survey(db, user_id) is not None
+
+
 def _require_survey(db: Session, user: User) -> None:
-    if not _survey_submitted(db, user.id):
+    response = _submitted_survey(db, user.id)
+    if response is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="请先完成并提交 BFI-44 问卷，再进入博弈",
+        )
+    if response.quality_passed is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="本次问卷未达到真人博弈的数据质量要求",
         )
 
 
@@ -60,12 +86,13 @@ def _require_active_experiment(experiment: Experiment) -> None:
 
 
 def _finished_scene_keys(db: Session, user_id: int, experiment_id: int) -> dict[int, int]:
-    """scene_id -> 该场景已完成局的最高得分。"""
+    """scene_id -> 该场景已完成真人局的最高得分。"""
     rows = (
         db.query(GameSession)
         .filter(
             GameSession.user_id == user_id,
             GameSession.experiment_id == experiment_id,
+            GameSession.mode == "matched",
             GameSession.status == "finished",
         )
         .all()
@@ -77,11 +104,13 @@ def _finished_scene_keys(db: Session, user_id: int, experiment_id: int) -> dict[
 
 
 def _progress_flags(db: Session, user: User, experiment: Experiment) -> tuple[int, int, bool]:
-    scenes = [s for s in experiment.scenes if s.enabled and s.required]
     best = _finished_scene_keys(db, user.id, experiment.id)
-    done = sum(1 for s in scenes if s.id in best)
-    required = len(scenes)
-    return done, required, done >= required and required > 0
+    required_scene_ids = {
+        scene.id for scene in experiment.scenes if scene.enabled and scene.required
+    }
+    done = len(required_scene_ids.intersection(best))
+    required = len(required_scene_ids)
+    return done, required, required > 0 and done == required
 
 
 def _session_out(db: Session, session: GameSession, user: User) -> SessionOut:
@@ -114,17 +143,58 @@ def list_stag_scenes(
 ):
     """场景列表 + 个人完成进度。"""
     experiment = _get_stag_experiment(db)
-    survey_done = _survey_submitted(db, current_user.id)
-    unlocked = survey_done and experiment.status == "active"
+    survey_response = _submitted_survey(db, current_user.id)
+    survey_done = survey_response is not None
+    survey_quality_failed = survey_done and survey_response.quality_passed is not True
+    unlocked = survey_done and not survey_quality_failed and experiment.status == "active"
+    understood = comprehension_passed(db, current_user.id, experiment.id)
     best = _finished_scene_keys(db, current_user.id, experiment.id)
     scenes_sorted = sorted(
         [s for s in experiment.scenes if s.enabled],
         key=lambda x: x.sort_order,
     )
-    required_scenes = [s for s in scenes_sorted if s.required]
-    done = sum(1 for s in required_scenes if s.id in best)
-    required = len(required_scenes)
-    all_done = done >= required and required > 0
+    required_scene_ids = {scene.id for scene in scenes_sorted if scene.required}
+    done = len(required_scene_ids.intersection(best))
+    required = len(required_scene_ids)
+    all_done = required > 0 and done == required
+
+    active_match = (
+        db.query(PvpMatch)
+        .filter(
+            PvpMatch.experiment_id == experiment.id,
+            PvpMatch.status.in_(("waiting", "playing")),
+            or_(
+                PvpMatch.user_a_id == current_user.id,
+                PvpMatch.user_b_id == current_user.id,
+            ),
+        )
+        .order_by(PvpMatch.id.desc())
+        .first()
+    )
+    paired_match_exists = (
+        db.query(PvpMatch.id)
+        .filter(
+            PvpMatch.experiment_id == experiment.id,
+            PvpMatch.user_b_id.isnot(None),
+            or_(
+                PvpMatch.user_a_id == current_user.id,
+                PvpMatch.user_b_id == current_user.id,
+            ),
+        )
+        .first()
+        is not None
+    )
+    legacy_matched_session_exists = (
+        db.query(GameSession.id)
+        .filter(
+            GameSession.user_id == current_user.id,
+            GameSession.experiment_id == experiment.id,
+            GameSession.mode == "matched",
+        )
+        .first()
+        is not None
+    )
+    participation_locked = paired_match_exists or legacy_matched_session_exists
 
     return StagHuntProgressOut(
         experiment_code=experiment.code,
@@ -132,12 +202,14 @@ def list_stag_scenes(
         rounds_per_scene=experiment.rounds_per_scene,
         unlock_games=unlocked,
         survey_done=survey_done,
-        # 参与者实验结束前不获知质量判断，避免据此调整后续行为。
-        survey_quality_failed=False,
+        survey_quality_failed=survey_quality_failed,
+        comprehension_passed=understood,
         experiment_status=experiment.status,
         done_count=done,
         required_count=required,
         all_done=all_done,
+        participation_locked=participation_locked,
+        active_match_id=active_match.id if active_match is not None else None,
         scenes=[
             SceneOut(
                 scene_key=s.scene_key,
@@ -157,6 +229,51 @@ def list_stag_scenes(
     )
 
 
+def _comprehension_out(db: Session, user_id: int, experiment_id: int) -> ComprehensionOut:
+    row = get_comprehension(db, user_id, experiment_id)
+    return ComprehensionOut(
+        passed=bool(row and row.passed),
+        attempts=row.attempts if row else 0,
+        incorrect_ids=list(row.last_incorrect_ids or []) if row else [],
+        questions=COMPREHENSION_QUESTIONS,
+    )
+
+
+@router.get(
+    "/experiments/stag-hunt/comprehension",
+    response_model=ComprehensionOut,
+)
+def get_stag_comprehension(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取真人匹配前的规则理解检查。"""
+    _require_survey(db, current_user)
+    experiment = _get_stag_experiment(db)
+    _require_active_experiment(experiment)
+    return _comprehension_out(db, current_user.id, experiment.id)
+
+
+@router.post(
+    "/experiments/stag-hunt/comprehension",
+    response_model=ComprehensionOut,
+)
+def check_stag_comprehension(
+    body: ComprehensionSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """全部答对后记录通过；答错可复习规则并再次检查。"""
+    _require_survey(db, current_user)
+    experiment = _get_stag_experiment(db)
+    _require_active_experiment(experiment)
+    expected_ids = set(CORRECT_ANSWERS)
+    if set(body.answers) != expected_ids:
+        raise HTTPException(status_code=400, detail="请完成全部理解检查题")
+    row = submit_comprehension(db, current_user.id, experiment.id, body.answers)
+    return _comprehension_out(db, current_user.id, experiment.id)
+
+
 @router.post(
     "/experiments/stag-hunt/scenes/{scene_key}/sessions",
     response_model=SessionOut,
@@ -171,6 +288,8 @@ def start_session(
     _require_survey(db, current_user)
     experiment = _get_stag_experiment(db)
     _require_active_experiment(experiment)
+    if not comprehension_passed(db, current_user.id, experiment.id):
+        raise HTTPException(status_code=403, detail="请先通过猎鹿博弈规则理解检查")
     scene = next((s for s in experiment.scenes if s.scene_key == scene_key and s.enabled), None)
     if scene is None:
         raise HTTPException(status_code=404, detail="场景不存在")

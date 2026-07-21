@@ -46,14 +46,28 @@ class AttentionAnswer(BaseModel):
     value: int = Field(ge=1, le=5)
 
 
+class DiligenceAnswer(BaseModel):
+    check_id: str = Field(min_length=1, max_length=32)
+    value: int = Field(ge=1, le=5)
+
+
 class SubmitSurveyRequest(BaseModel):
     attention_answers: list[AttentionAnswer] = Field(min_length=2, max_length=2)
+    diligence_answers: list[DiligenceAnswer] = Field(min_length=3, max_length=3)
+    page_timings_seconds: dict[str, float] = Field(default_factory=dict)
+    blur_count: int = Field(default=0, ge=0, le=10000)
+    device_token: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def reject_duplicate_attention_checks(self):
         check_ids = [answer.check_id for answer in self.attention_answers]
         if len(check_ids) != len(set(check_ids)):
             raise ValueError("作答确认题不能重复")
+        diligence_ids = [answer.check_id for answer in self.diligence_answers]
+        if len(diligence_ids) != len(set(diligence_ids)):
+            raise ValueError("自报作答质量题不能重复")
+        if any(value < 0 or value > 7200 for value in self.page_timings_seconds.values()):
+            raise ValueError("分组作答时间无效")
         return self
 
 

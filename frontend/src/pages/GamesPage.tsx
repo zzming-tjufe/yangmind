@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import * as gamesApi from "../api/games";
-import type { PvpMatch, Scene, StagProgress } from "../api/games";
+import type { Comprehension, PvpMatch, Scene, StagProgress } from "../api/games";
 import { useToast } from "../context/ToastContext";
 import { useSiteContent } from "../hooks/useSite";
 
-type Stage = "lobby" | "scenes" | "matching" | "matched" | "pvp";
+type Stage = "lobby" | "comprehension" | "scenes" | "matching" | "matched" | "pvp";
 
 /** 用服务端 seconds_left 校准，本地平滑跳动，避免每秒整跳。 */
 function useLocalSeconds(secondsLeft: number | null | undefined, syncKey: string) {
@@ -58,6 +58,8 @@ export function GamesPage() {
   const [stage, setStage] = useState<Stage>("lobby");
   const [scene, setScene] = useState<Scene | null>(null);
   const [pvp, setPvp] = useState<PvpMatch | null>(null);
+  const [comprehension, setComprehension] = useState<Comprehension | null>(null);
+  const [comprehensionAnswers, setComprehensionAnswers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const lastHistLen = useRef(0);
@@ -130,6 +132,10 @@ export function GamesPage() {
       gamesApi
         .getPvpMatch(matchId)
         .then((m) => {
+          if (m.id !== matchId) {
+            lastHistLen.current = 0;
+            toast(`第一场景已完成，继续与同一对手进入「${m.scene_title}」`);
+          }
           setPvp(m);
           bindScene(m);
           if (m.status === "playing" && (stage === "matching" || stage === "matched")) {
@@ -142,7 +148,7 @@ export function GamesPage() {
         .catch(() => undefined);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [stage, pvp?.id, pvp?.status, reload, bindScene, enterMatchedFlash]);
+  }, [stage, pvp?.id, pvp?.status, reload, bindScene, enterMatchedFlash, toast]);
 
   // 轮次结算 / 超时提示
   useEffect(() => {
@@ -179,7 +185,7 @@ export function GamesPage() {
     if (!progress?.unlock_games) {
       toast(
         progress?.survey_quality_failed
-          ? "问卷质量检查未通过，请返回 BFI-44 重新作答"
+          ? "本次问卷未达到真人博弈的数据质量要求"
           : !progress?.survey_done
             ? "请先完成 BFI-44 问卷"
             : progress?.experiment_status !== "active"
@@ -188,7 +194,52 @@ export function GamesPage() {
       );
       return;
     }
+    if (!progress.comprehension_passed) {
+      setBusy(true);
+      try {
+        const check = await gamesApi.getComprehension();
+        setComprehension(check);
+        if (check.passed) {
+          await reload();
+          setStage("scenes");
+        } else {
+          setStage("comprehension");
+        }
+      } catch (e) {
+        toast(e instanceof ApiError ? e.message : "加载理解检查失败");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setStage("scenes");
+  }
+
+  async function checkComprehension() {
+    if (!comprehension) return;
+    const missing = comprehension.questions.find(
+      (question) => !comprehensionAnswers[question.question_id],
+    );
+    if (missing) {
+      toast("请完成全部理解检查题");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await gamesApi.submitComprehension(comprehensionAnswers);
+      setComprehension(result);
+      if (result.passed) {
+        await reload();
+        toast("理解检查已通过，可以进入真人匹配");
+        setStage("scenes");
+      } else {
+        toast(`还有 ${result.incorrect_ids.length} 题不正确，请根据规则重新检查`);
+      }
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "提交理解检查失败");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function startPvp(s: Scene) {
@@ -233,6 +284,10 @@ export function GamesPage() {
     setBusy(true);
     try {
       const next = await gamesApi.submitPvpChoice(pvp.id, choice, pvp.current_round);
+      if (next.id !== pvp.id) {
+        lastHistLen.current = 0;
+        toast(`第一场景已完成，继续与同一对手进入「${next.scene_title}」`);
+      }
       setPvp(next);
       bindScene(next);
       if (next.status === "finished") {
@@ -290,7 +345,7 @@ export function GamesPage() {
             <div>
               <b>
                 {progress?.survey_quality_failed
-                  ? "问卷质量检查未通过"
+                  ? "本次实验资格审核未通过"
                   : !progress?.survey_done
                     ? "博弈入口暂未解锁"
                     : progress?.experiment_status !== "active"
@@ -299,7 +354,7 @@ export function GamesPage() {
               </b>
               <small>
                 {progress?.survey_quality_failed
-                  ? "请返回「BFI-44 问卷」点击重新作答。通过质量检查后即可进入实验。"
+                  ? "该答卷不会进入人格对决样本，也无法进入真人匹配；如遇技术故障请联系实验管理员。"
                   : !progress?.survey_done
                     ? "完成 BFI-44 问卷后即可进入全部实验。"
                     : progress?.experiment_status !== "active"
@@ -361,9 +416,13 @@ export function GamesPage() {
               </div>
               <button className="primary" type="button" onClick={enterStag}>
                 {progress?.unlock_games
-                  ? "选择场景 →"
+                  ? progress.active_match_id
+                    ? "继续正式实验 →"
+                    : progress.all_done || progress.participation_locked
+                      ? "查看实验状态 →"
+                      : "进入唯一一次正式实验 →"
                   : progress?.survey_quality_failed
-                    ? "需重新作答问卷 →"
+                    ? "无法进入真人匹配"
                     : "完成问卷后解锁 →"}
               </button>
             </div>
@@ -373,7 +432,82 @@ export function GamesPage() {
     );
   }
 
+  if (stage === "comprehension" && comprehension) {
+    const incorrect = new Set(comprehension.incorrect_ids);
+    return (
+      <div className="page page-soft-in">
+        <button className="backbtn" type="button" onClick={() => setStage("lobby")}>
+          ← 返回博弈大厅
+        </button>
+        <section className="hero card">
+          <div>
+            <div className="eyebrow">COMPREHENSION CHECK</div>
+            <h2>猎鹿博弈规则理解检查</h2>
+            <p>全部答对后才能进入真人匹配。答错可以复习规则后再次检查，不影响人格问卷。</p>
+          </div>
+        </section>
+
+        <div className="card" style={{ marginTop: 18, padding: 20 }}>
+          <h3 style={{ marginTop: 0 }}>得分规则</h3>
+          <p>A/A：双方各 10 分；A/B：A 方 0 分、B 方 6 分；B/B：双方各 6 分。</p>
+          <p style={{ marginBottom: 0 }}>每轮双方同时独立选择，不能提前看到对方本轮选择。</p>
+        </div>
+
+        <div style={{ display: "grid", gap: 14, marginTop: 18 }}>
+          {comprehension.questions.map((question, index) => (
+            <section
+              className="card"
+              key={question.question_id}
+              style={{
+                padding: 20,
+                borderColor: incorrect.has(question.question_id) ? "#d95c5c" : undefined,
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>
+                {index + 1}. {question.prompt}
+              </h3>
+              <div style={{ display: "grid", gap: 8 }}>
+                {question.options.map((option) => (
+                  <label key={option.value} style={{ display: "flex", gap: 9, alignItems: "center" }}>
+                    <input
+                      type="radio"
+                      name={`comprehension-${question.question_id}`}
+                      value={option.value}
+                      checked={comprehensionAnswers[question.question_id] === option.value}
+                      onChange={() =>
+                        setComprehensionAnswers((previous) => ({
+                          ...previous,
+                          [question.question_id]: option.value,
+                        }))
+                      }
+                    />
+                    <span>{option.label}</span>
+                  </label>
+                ))}
+              </div>
+              {incorrect.has(question.question_id) && (
+                <small style={{ color: "#c94848" }}>本题不正确，请对照上方规则重新选择。</small>
+              )}
+            </section>
+          ))}
+        </div>
+        <button
+          className="primary"
+          type="button"
+          disabled={busy}
+          onClick={checkComprehension}
+          style={{ marginTop: 18 }}
+        >
+          {busy ? "检查中…" : "提交理解检查"}
+        </button>
+      </div>
+    );
+  }
+
   if (stage === "scenes" && progress) {
+    const firstRequiredScene = progress.scenes.find((item) => item.required);
+    const cannotResume =
+      progress.participation_locked && !progress.active_match_id && !progress.all_done;
     return (
       <div className="page page-soft-in">
         <button className="backbtn" type="button" onClick={() => setStage("lobby")}>
@@ -384,8 +518,7 @@ export function GamesPage() {
             <div className="eyebrow">STAG HUNT · PVP</div>
             <h2>猎鹿博弈 · 真人匹配</h2>
             <p>
-              选择场景后进入匹配。已完成的场景也可再次匹配；每轮限时 15
-              秒，双方同步出结果。
+              你只会匹配一次真人对手，之后双方按顺序连续完成下面两个场景。整个正式实验结束后不能再次匹配或更换对手。
             </p>
           </div>
         </div>
@@ -394,40 +527,66 @@ export function GamesPage() {
             <span>{progress.all_done ? "EXPERIMENT COMPLETE" : "REQUIRED PROGRESS"}</span>
             <b>
               {progress.all_done
-                ? "必做场景均已至少完成一次"
-                : `必做进度：${progress.done_count} / ${progress.required_count}`}
+                ? "你已完成唯一一次正式真人实验"
+                : cannotResume
+                  ? "该账号已经使用过真人实验资格，不能再次匹配"
+                  : progress.active_match_id
+                    ? `固定对手实验进行中：${progress.done_count} / ${progress.required_count} 个场景`
+                    : `待完成场景：${progress.done_count} / ${progress.required_count}`}
             </b>
-            <small>完成记录取该场景历史最高分；可随时再次进入匹配。</small>
+            <small>一次匹配 · 同一对手 · 两个场景连续完成 · 不允许重复参加</small>
           </div>
           <strong>
             {progress.done_count}/{progress.required_count}
           </strong>
         </div>
         <div className="scene-grid">
-          {progress.scenes.map((s) => (
+          {progress.scenes.map((s) => {
+            const isFirstRequired = s.scene_key === firstRequiredScene?.scene_key;
+            const canEnter = isFirstRequired && !progress.all_done && !cannotResume;
+            return (
             <article
               key={s.scene_key}
-              className={`scenario-card card ${s.completed ? "completed" : ""}`}
+              className={`scenario-card card ${s.completed || progress.all_done ? "completed" : ""}`}
               data-no={s.no}
             >
-              <span className="scenario-status">{s.completed ? "✓ 已完成" : "○ 必做场景"}</span>
+              <span className="scenario-status">
+                {s.completed
+                  ? "✓ 已完成"
+                  : progress.all_done
+                    ? "✓ 实验已结束"
+                    : isFirstRequired
+                      ? progress.active_match_id
+                        ? "● 点击继续当前实验"
+                        : "① 从此场景开始"
+                      : "② 与同一对手自动进入"}
+              </span>
               <h3>{s.title}</h3>
               <p>{s.short_desc}</p>
               <div className="scenario-meta">
                 <i>{progress.rounds_per_scene} 轮</i>
                 <i>真人同步</i>
-                <i>{s.completed ? `最高 ${s.best_score}` : "A / B"}</i>
+                <i>{s.completed ? `得分 ${s.best_score}` : "A / B"}</i>
               </div>
               <button
                 className="primary"
                 type="button"
-                disabled={busy}
+                disabled={busy || !canEnter}
                 onClick={() => startPvp(s)}
               >
-                {s.completed ? "再次匹配 →" : "开始匹配 →"}
+                {progress.all_done
+                  ? "正式实验已完成"
+                  : cannotResume
+                    ? "真人实验资格已使用"
+                    : isFirstRequired
+                      ? progress.active_match_id
+                        ? "继续当前实验 →"
+                        : "开始唯一一次匹配 →"
+                      : "完成第一场景后自动进入"}
               </button>
             </article>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -511,15 +670,8 @@ export function GamesPage() {
             </h2>
             <div className="finish-score">{pvp.my_score} 分</div>
             <p>对方得分：{pvp.opponent_score}</p>
+            <p>你已与同一位对手完成全部两个场景。本次正式实验机会已经使用，不能再次匹配或更换对手重做。</p>
             <div className="finish-actions">
-              <button
-                className="secondary"
-                type="button"
-                disabled={busy}
-                onClick={() => startPvp(scene)}
-              >
-                再来一局
-              </button>
               <button
                 className="primary"
                 type="button"
@@ -528,7 +680,7 @@ export function GamesPage() {
                   setStage("scenes");
                 }}
               >
-                返回场景列表
+                查看实验完成情况
               </button>
             </div>
           </section>

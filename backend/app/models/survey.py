@@ -97,3 +97,44 @@ class PersonalityScore(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     response: Mapped["SurveyResponse"] = relationship(back_populates="personality_score")
+
+
+class SurveyRetakeArchive(Base):
+    """管理员授权重做前保存的原始正式答卷快照。"""
+
+    __tablename__ = "survey_retake_archives"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("survey_instruments.id"), index=True)
+    original_response_id: Mapped[int] = mapped_column(Integer, index=True)
+    retake_no: Mapped[int] = mapped_column(Integer)
+    authorized_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    response_snapshot: Mapped[dict] = mapped_column(JSON)
+    archived_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SurveyQualityTelemetry(Base):
+    """不参与人格计分的作答过程、质量复核与审计信息。"""
+
+    __tablename__ = "survey_quality_telemetry"
+    __table_args__ = (UniqueConstraint("response_id", name="uq_quality_telemetry_response"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    response_id: Mapped[int] = mapped_column(ForeignKey("survey_responses.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    attention_answers: Mapped[dict] = mapped_column(JSON)
+    diligence_answers: Mapped[dict] = mapped_column(JSON)
+    page_timings_seconds: Mapped[dict] = mapped_column(JSON)
+    blur_count: Mapped[int] = mapped_column(Integer, default=0)
+    device_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    hard_exclusion: Mapped[bool] = mapped_column(Boolean, default=False)
+    hard_exclusion_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    soft_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    admin_review_status: Mapped[str] = mapped_column(String(32), default="not_needed")
+    admin_review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

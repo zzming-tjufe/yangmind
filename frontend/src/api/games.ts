@@ -21,10 +21,13 @@ export type StagProgress = {
   unlock_games: boolean;
   survey_done: boolean;
   survey_quality_failed?: boolean;
+  comprehension_passed: boolean;
   experiment_status: string;
   done_count: number;
   required_count: number;
   all_done: boolean;
+  participation_locked: boolean;
+  active_match_id: number | null;
   scenes: Scene[];
   payoff_matrix: Record<string, string>;
 };
@@ -52,6 +55,30 @@ export type Session = {
 
 export function getScenes() {
   return api<StagProgress>("/api/v1/experiments/stag-hunt/scenes");
+}
+
+export type ComprehensionQuestion = {
+  question_id: string;
+  prompt: string;
+  options: { value: string; label: string }[];
+};
+
+export type Comprehension = {
+  passed: boolean;
+  attempts: number;
+  incorrect_ids: string[];
+  questions: ComprehensionQuestion[];
+};
+
+export function getComprehension() {
+  return api<Comprehension>("/api/v1/experiments/stag-hunt/comprehension");
+}
+
+export function submitComprehension(answers: Record<string, string>) {
+  return api<Comprehension>("/api/v1/experiments/stag-hunt/comprehension", {
+    method: "POST",
+    json: { answers },
+  });
 }
 
 export function startSession(sceneKey: string) {

@@ -7,7 +7,7 @@ from app.models.game import Experiment, ExperimentScene, GameSession
 
 
 def personality_feedback_unlocked(db: Session, user_id: int) -> bool:
-    """全部必做场景完成后才展示人格反馈，避免人格标签影响博弈选择。"""
+    """固定配对完成全部必做场景后才展示人格反馈。"""
     experiment = (
         db.query(Experiment)
         .filter(Experiment.code == STAG_HUNT_CODE)
@@ -17,25 +17,30 @@ def personality_feedback_unlocked(db: Session, user_id: int) -> bool:
         return False
     required_scene_ids = {
         scene_id
-        for (scene_id,) in db.query(ExperimentScene.id)
-        .filter(
-            ExperimentScene.experiment_id == experiment.id,
-            ExperimentScene.enabled.is_(True),
-            ExperimentScene.required.is_(True),
+        for (scene_id,) in (
+            db.query(ExperimentScene.id)
+            .filter(
+                ExperimentScene.experiment_id == experiment.id,
+                ExperimentScene.enabled.is_(True),
+                ExperimentScene.required.is_(True),
+            )
+            .all()
         )
-        .all()
     }
     if not required_scene_ids:
         return False
     finished_scene_ids = {
         scene_id
-        for (scene_id,) in db.query(GameSession.scene_id)
-        .filter(
-            GameSession.user_id == user_id,
-            GameSession.experiment_id == experiment.id,
-            GameSession.status == "finished",
-            GameSession.scene_id.in_(required_scene_ids),
+        for (scene_id,) in (
+            db.query(GameSession.scene_id)
+            .filter(
+                GameSession.user_id == user_id,
+                GameSession.experiment_id == experiment.id,
+                GameSession.mode == "matched",
+                GameSession.status == "finished",
+            )
+            .distinct()
+            .all()
         )
-        .all()
     }
     return required_scene_ids.issubset(finished_scene_ids)

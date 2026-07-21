@@ -27,11 +27,33 @@ export function BfiPage() {
   const [mine, setMine] = useState<MyResponse | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [attentionAnswers, setAttentionAnswers] = useState<Record<string, number>>({});
+  const [diligenceAnswers, setDiligenceAnswers] = useState<Record<string, number>>({});
   const [qpage, setQpage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   /** 翻页后定位到某题；null 表示不处理 */
   const pendingFocusItem = useRef<number | null>(null);
+  const pageTimings = useRef<Record<string, number>>({});
+  const pageStartedAt = useRef(Date.now());
+  const blurCount = useRef(0);
+
+  function recordCurrentPageTime() {
+    if (!introDone) return;
+    const elapsed = Math.max((Date.now() - pageStartedAt.current) / 1000, 0);
+    const key = String(qpage);
+    pageTimings.current[key] = (pageTimings.current[key] || 0) + elapsed;
+    pageStartedAt.current = Date.now();
+  }
+
+  useEffect(() => {
+    if (!introDone || mine?.status === "submitted") return;
+    pageStartedAt.current = Date.now();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") blurCount.current += 1;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [introDone, mine?.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +141,7 @@ export function BfiPage() {
       }
       return;
     }
+    recordCurrentPageTime();
     const qualityChecks = instrument?.quality_checks ?? [];
     const missingCheck = qualityChecks.find((check) => !attentionAnswers[check.check_id]);
     if (missingCheck) {
@@ -128,11 +151,33 @@ export function BfiPage() {
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
+    const diligenceChecks = ["diligence_read", "diligence_authentic", "diligence_technical"];
+    if (diligenceChecks.some((checkId) => !diligenceAnswers[checkId])) {
+      toast("请完成作答质量确认后再提交");
+      document.querySelector("[data-diligence-check]")?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      return;
+    }
+    const confirmed = window.confirm(
+      "人格问卷正式提交后只有一次机会，不能自行修改或重做。请确认你已认真、如实完成全部题目。\n\n确定正式提交吗？",
+    );
+    if (!confirmed) return;
     setBusy(true);
     try {
-      const resp = await surveyApi.submitSurvey(attentionAnswers);
+      recordCurrentPageTime();
+      const resp = await surveyApi.submitSurvey(attentionAnswers, {
+        diligence_answers: diligenceAnswers,
+        page_timings_seconds: pageTimings.current,
+        blur_count: blurCount.current,
+      });
       setMine(resp);
-      toast("问卷已提交，博弈入口已解锁");
+      toast(
+        resp.unlock_games
+          ? "问卷已提交，博弈入口已解锁"
+          : "问卷已提交，本次答卷未进入真人博弈样本",
+      );
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "提交失败");
     } finally {
@@ -179,14 +224,19 @@ export function BfiPage() {
   }
 
   if (mine?.status === "submitted") {
+    const eligible = mine.unlock_games;
     return (
       <div className="page">
         <section className="hero card">
           <div>
-            <div className="eyebrow">问卷已提交 · 等待实验完成</div>
-            <h2>人格反馈将在博弈结束后展示</h2>
+            <div className="eyebrow">
+              {eligible ? "问卷已提交 · 等待实验完成" : "问卷已提交 · 流程结束"}
+            </div>
+            <h2>{eligible ? "人格反馈将在博弈结束后展示" : "本次答卷未进入真人博弈样本"}</h2>
             <p>
-              你的答案已经安全记录。为避免人格标签影响后续决策，请先完成全部必做博弈场景；完成后回到这里即可查看结果。
+              {eligible
+                ? "你的答案已经安全记录。为避免人格标签影响后续决策，请先完成全部必做博弈场景；完成后回到这里即可查看结果。"
+                : "你的答案已经安全记录，但未达到本次真人对决的数据质量要求，因此不会进入匹配。如作答时遇到技术故障，请联系实验管理员。"}
             </p>
           </div>
           <div className="ring" style={{ ["--p" as string]: "360deg" }}>
@@ -196,8 +246,12 @@ export function BfiPage() {
         <div className="quality">
           <i>→</i>
           <div>
-            <b>下一步：进入博弈实验</b>
-            <small>质量指标仅用于研究数据筛选，不会在实验过程中提示或改变你的作答。</small>
+            <b>{eligible ? "下一步：进入博弈实验" : "本次实验流程已结束"}</b>
+            <small>
+              {eligible
+                ? "只有双方问卷质量均通过，才会进入真人匹配。"
+                : "正式答卷不能覆盖或重新提交；技术故障由实验管理员核查处理。"}
+            </small>
           </div>
         </div>
       </div>
@@ -247,6 +301,16 @@ export function BfiPage() {
           </div>
         </section>
 
+        <div className="alert" role="alert" style={{ marginTop: 16, marginBottom: 16 }}>
+          <i>!</i>
+          <div>
+            <b>请注意：正式人格检测只有一次机会</b>
+            <small>
+              为保证问卷质量，每位参与者只有一次正式检测机会，请大家仔细、如实作答哦～提交后不能自行修改或重做；如遇技术故障，请联系管理员核实处理。
+            </small>
+          </div>
+        </div>
+
         <div className="dimension-grid">
           {dimensions.map((d, i) => (
             <article
@@ -272,7 +336,7 @@ export function BfiPage() {
             <b>6–8 分钟 · 共 44 题</b>
           </div>
           <button className="primary" type="button" onClick={() => setIntroDone(true)}>
-            开始作答 →
+            我已知晓，开始作答 →
           </button>
         </div>
       </div>
@@ -375,6 +439,51 @@ export function BfiPage() {
                             setAttentionAnswers((previous) => ({
                               ...previous,
                               [check.check_id]: value,
+                            }))
+                          }
+                        />
+                        <i />
+                        {value}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {qpage === 4 ? (
+            <div className="quality-check-block" data-diligence-check>
+              <div className="quality-check-heading">
+                <b>作答质量确认</b>
+                <span>以下内容不计入人格得分，仅用于数据质量复核。</span>
+              </div>
+              {[
+                ["diligence_read", "我认真阅读了每道题，并根据题意作答。"],
+                ["diligence_authentic", "我的回答能够反映日常、稳定的自己。"],
+                ["diligence_technical", "本次作答存在明显技术问题，影响了我的回答。"],
+              ].map(([checkId, stem], index) => (
+                <div
+                  className={`qrow${diligenceAnswers[checkId] ? " answered" : ""}`}
+                  key={checkId}
+                >
+                  <div className="qtext">
+                    <b>S{index + 1}</b>
+                    {stem}
+                  </div>
+                  <div className="scale">
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <label
+                        key={value}
+                        className={diligenceAnswers[checkId] === value ? "picked" : undefined}
+                      >
+                        <input
+                          type="radio"
+                          name={checkId}
+                          checked={diligenceAnswers[checkId] === value}
+                          onChange={() =>
+                            setDiligenceAnswers((previous) => ({
+                              ...previous,
+                              [checkId]: value,
                             }))
                           }
                         />

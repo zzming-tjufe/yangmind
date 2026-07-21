@@ -35,6 +35,29 @@ export type AdminUser = {
   quality_passed: boolean | null;
   has_personality: boolean;
   status: string;
+  can_retake_survey: boolean;
+  retake_count: number;
+  retake_block_reason: string | null;
+  has_submitted_survey: boolean;
+  quality_review_status: string | null;
+  quality_soft_flags: string[];
+  quality_hard_exclusion: boolean;
+};
+
+export type SurveyQualityReview = {
+  user_id: number;
+  response_id: number;
+  quality_passed: boolean | null;
+  quality_flags: Record<string, unknown> | null;
+  attention_answers: Record<string, number>;
+  diligence_answers: Record<string, number>;
+  page_timings_seconds: Record<string, number>;
+  blur_count: number;
+  hard_exclusion: boolean;
+  hard_exclusion_reasons: string[];
+  soft_flags: string[];
+  review_status: string;
+  review_reason: string | null;
 };
 
 export type AdminPersonality = {
@@ -138,6 +161,28 @@ export function resetUserPassword(userId: number, new_password: string) {
   return api<{ ok: boolean }>(`/api/v1/admin/users/${userId}/reset-password`, {
     method: "POST",
     json: { new_password },
+  });
+}
+
+export function allowSurveyRetake(userId: number) {
+  return api<{ ok: boolean; retake_count: number }>(
+    `/api/v1/admin/users/${userId}/allow-survey-retake`,
+    { method: "POST" },
+  );
+}
+
+export function getSurveyQualityReview(userId: number) {
+  return api<SurveyQualityReview>(`/api/v1/admin/users/${userId}/survey-quality`);
+}
+
+export function reviewSurveyQuality(
+  userId: number,
+  status: "kept" | "excluded",
+  reason: string,
+) {
+  return api<SurveyQualityReview>(`/api/v1/admin/users/${userId}/survey-quality-review`, {
+    method: "PATCH",
+    json: { status, reason },
   });
 }
 

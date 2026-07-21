@@ -4,8 +4,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from app.data.bfi44_seed import INSTRUMENT_CODE
 from app.models.game import Experiment, ExperimentScene, GameRound, GameSession
 from app.models.match import PVP_ROUND_TIMEOUT_SEC, PvpMatch, PvpRound
+from app.models.survey import SurveyInstrument, SurveyResponse
 from app.models.user import User
 from app.services.pvp_engine import resolve_pvp_payoff
 
@@ -147,11 +149,16 @@ def claim_waiting_match(
     """原子占座：把一条 waiting 改成 playing 并写入 user_b。失败返回 None。"""
     candidates = (
         db.query(PvpMatch.id)
+        .join(SurveyResponse, SurveyResponse.user_id == PvpMatch.user_a_id)
+        .join(SurveyInstrument, SurveyInstrument.id == SurveyResponse.instrument_id)
         .filter(
             PvpMatch.status == "waiting",
             PvpMatch.scene_id == scene_id,
             PvpMatch.user_b_id.is_(None),
             PvpMatch.user_a_id != user_id,
+            SurveyResponse.status == "submitted",
+            SurveyResponse.quality_passed.is_(True),
+            SurveyInstrument.code == INSTRUMENT_CODE,
         )
         .order_by(PvpMatch.id.asc())
         .limit(5)
@@ -223,6 +230,59 @@ def _finish_match(db: Session, match: PvpMatch) -> None:
             sess.finished_at = match.finished_at
             sess.my_score = match.score_a if sid == match.session_a_id else match.score_b
             sess.opponent_score = match.score_b if sid == match.session_a_id else match.score_a
+
+    # A formal experiment is one fixed pairing that completes every required
+    # scene in order.  Finishing one scene therefore creates the next scene for
+    # the same two users instead of sending either user back to matchmaking.
+    if match.user_b_id is None:
+        return
+    scenes = (
+        db.query(ExperimentScene)
+        .filter(
+            ExperimentScene.experiment_id == match.experiment_id,
+            ExperimentScene.enabled.is_(True),
+            ExperimentScene.required.is_(True),
+        )
+        .order_by(ExperimentScene.sort_order.asc(), ExperimentScene.id.asc())
+        .all()
+    )
+    current_index = next(
+        (index for index, scene in enumerate(scenes) if scene.id == match.scene_id),
+        None,
+    )
+    if current_index is None or current_index + 1 >= len(scenes):
+        return
+
+    next_scene = scenes[current_index + 1]
+    existing = (
+        db.query(PvpMatch)
+        .filter(
+            PvpMatch.experiment_id == match.experiment_id,
+            PvpMatch.scene_id == next_scene.id,
+            PvpMatch.user_a_id == match.user_a_id,
+            PvpMatch.user_b_id == match.user_b_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        return
+
+    experiment = db.get(Experiment, match.experiment_id)
+    if experiment is None:
+        return
+    successor = PvpMatch(
+        experiment_id=match.experiment_id,
+        scene_id=next_scene.id,
+        status="playing",
+        user_a_id=match.user_a_id,
+        user_b_id=match.user_b_id,
+        rounds_total=experiment.rounds_per_scene,
+        current_round=1,
+    )
+    db.add(successor)
+    db.flush()
+    create_sessions_for_match(db, successor, next_scene, experiment)
+    start_round(db, successor)
 
 
 def create_sessions_for_match(

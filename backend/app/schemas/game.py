@@ -24,10 +24,13 @@ class StagHuntProgressOut(BaseModel):
     unlock_games: bool
     survey_done: bool = False
     survey_quality_failed: bool = False
+    comprehension_passed: bool = False
     experiment_status: str = "active"
     done_count: int
     required_count: int
     all_done: bool
+    participation_locked: bool = False
+    active_match_id: int | None = None
     scenes: list[SceneOut]
     payoff_matrix: dict = Field(
         default_factory=lambda: {
@@ -67,3 +70,25 @@ class SessionOut(BaseModel):
 
 class PlayRoundRequest(BaseModel):
     choice: str = Field(pattern="^[ABab]$")
+
+
+class ComprehensionOptionOut(BaseModel):
+    value: str
+    label: str
+
+
+class ComprehensionQuestionOut(BaseModel):
+    question_id: str
+    prompt: str
+    options: list[ComprehensionOptionOut]
+
+
+class ComprehensionSubmitRequest(BaseModel):
+    answers: dict[str, str]
+
+
+class ComprehensionOut(BaseModel):
+    passed: bool
+    attempts: int = 0
+    incorrect_ids: list[str] = Field(default_factory=list)
+    questions: list[ComprehensionQuestionOut] = Field(default_factory=list)

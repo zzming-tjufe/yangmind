@@ -46,7 +46,24 @@ export function saveAnswers(answers: { item_no: number; value: number }[]) {
   });
 }
 
-export function submitSurvey(attentionAnswers: Record<string, number>) {
+function getSurveyDeviceToken() {
+  const key = "ym_survey_device_token";
+  let token = localStorage.getItem(key);
+  if (!token) {
+    token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    localStorage.setItem(key, token);
+  }
+  return token;
+}
+
+export function submitSurvey(
+  attentionAnswers: Record<string, number>,
+  telemetry: {
+    diligence_answers: Record<string, number>;
+    page_timings_seconds: Record<string, number>;
+    blur_count: number;
+  },
+) {
   return api<MyResponse>("/api/v1/surveys/bfi-44/submit", {
     method: "POST",
     json: {
@@ -54,6 +71,12 @@ export function submitSurvey(attentionAnswers: Record<string, number>) {
         check_id,
         value,
       })),
+      diligence_answers: Object.entries(telemetry.diligence_answers).map(
+        ([check_id, value]) => ({ check_id, value }),
+      ),
+      page_timings_seconds: telemetry.page_timings_seconds,
+      blur_count: telemetry.blur_count,
+      device_token: getSurveyDeviceToken(),
     },
   });
 }

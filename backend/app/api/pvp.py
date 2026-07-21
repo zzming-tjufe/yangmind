@@ -9,8 +9,8 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.data.bfi44_seed import INSTRUMENT_CODE
 from app.data.stag_hunt_seed import STAG_HUNT_CODE
-from app.models.game import Experiment, ExperimentScene
-from app.models.match import PvpMatch
+from app.models.game import Experiment, ExperimentScene, GameSession
+from app.models.match import PvpDecisionTelemetry, PvpMatch
 from app.models.survey import SurveyInstrument, SurveyResponse
 from app.models.user import User
 from app.services.pvp import (
@@ -25,6 +25,7 @@ from app.services.pvp import (
     start_round,
     sweep_overdue_matches,
 )
+from app.services.game_comprehension import comprehension_passed
 
 router = APIRouter(prefix="/api/v1/pvp", tags=["pvp"])
 
@@ -33,7 +34,7 @@ def _require_survey(db: Session, user: User) -> None:
     instrument = db.query(SurveyInstrument).filter(SurveyInstrument.code == INSTRUMENT_CODE).first()
     if instrument is None:
         raise HTTPException(status_code=403, detail="请先完成并提交 BFI-44 问卷")
-    ok = (
+    response = (
         db.query(SurveyResponse)
         .filter(
             SurveyResponse.user_id == user.id,
@@ -41,10 +42,11 @@ def _require_survey(db: Session, user: User) -> None:
             SurveyResponse.status == "submitted",
         )
         .first()
-        is not None
     )
-    if not ok:
+    if response is None:
         raise HTTPException(status_code=403, detail="请先完成并提交 BFI-44 问卷")
+    if response.quality_passed is not True:
+        raise HTTPException(status_code=403, detail="本次问卷未达到真人博弈的数据质量要求")
 
 
 def _get_scene(db: Session, scene_key: str) -> tuple[Experiment, ExperimentScene]:
@@ -76,31 +78,76 @@ def _find_active(db: Session, user_id: int) -> PvpMatch | None:
     )
 
 
+def _first_required_scene(experiment: Experiment) -> ExperimentScene | None:
+    scenes = sorted(
+        [scene for scene in experiment.scenes if scene.enabled and scene.required],
+        key=lambda scene: (scene.sort_order, scene.id),
+    )
+    return scenes[0] if scenes else None
+
+
+def _successor_for(db: Session, match: PvpMatch, user_id: int) -> PvpMatch | None:
+    """Return the next scene automatically created for this fixed pair."""
+    active = _find_active(db, user_id)
+    if active is None or active.id == match.id:
+        return None
+    return active
+
+
 @router.post("/stag-hunt/scenes/{scene_key}/queue", response_model=PvpMatchOut, status_code=201)
 def join_queue(
     scene_key: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """加入真人匹配队列；若已有等待者则立即开局。"""
+    """加入唯一一次真人配对；两个必做场景均由同一对手连续完成。"""
     _require_survey(db, current_user)
     experiment, scene = _get_scene(db, scene_key)
+    if not comprehension_passed(db, current_user.id, experiment.id):
+        raise HTTPException(status_code=403, detail="请先通过猎鹿博弈规则理解检查")
 
-    # 顺手清理超时对局，避免双方离线后永久卡死
     sweep_overdue_matches(db)
-
     active = _find_active(db, current_user.id)
     if active:
         catch_up_match(db, active)
         db.refresh(active)
         if active.status in ("waiting", "playing"):
-            sc = db.get(ExperimentScene, active.scene_id)
-            if sc is None:
+            active_scene = db.get(ExperimentScene, active.scene_id)
+            if active_scene is None:
                 raise HTTPException(status_code=404, detail="场景不存在")
-            out = match_out(db, active, current_user, sc, resumed=True)
+            out = match_out(db, active, current_user, active_scene, resumed=True)
             db.commit()
             return out
-        # 已因超时扫尾结束，继续走新匹配
+
+    paired_before = (
+        db.query(PvpMatch.id)
+        .filter(
+            PvpMatch.experiment_id == experiment.id,
+            PvpMatch.user_b_id.isnot(None),
+            or_(PvpMatch.user_a_id == current_user.id, PvpMatch.user_b_id == current_user.id),
+        )
+        .first()
+    )
+    legacy_matched_session = (
+        db.query(GameSession.id)
+        .filter(
+            GameSession.user_id == current_user.id,
+            GameSession.experiment_id == experiment.id,
+            GameSession.mode == "matched",
+        )
+        .first()
+    )
+    if paired_before is not None or legacy_matched_session is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="每位玩家只能参加一次正式实验，你已使用真人匹配资格",
+        )
+
+    first_scene = _first_required_scene(experiment)
+    if first_scene is None:
+        raise HTTPException(status_code=500, detail="正式实验尚未配置必做场景")
+    if scene.id != first_scene.id:
+        raise HTTPException(status_code=409, detail="正式实验必须从第一个场景开始")
 
     claimed = claim_waiting_match(db, scene_id=scene.id, user_id=current_user.id)
     if claimed:
@@ -168,7 +215,16 @@ def get_match(
     scene = db.get(ExperimentScene, match.scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail="场景不存在")
-    out = match_out(db, match, current_user, scene)
+    catch_up_match(db, match)
+    db.refresh(match)
+    successor = _successor_for(db, match, current_user.id) if match.status == "finished" else None
+    if successor is not None:
+        next_scene = db.get(ExperimentScene, successor.scene_id)
+        if next_scene is None:
+            raise HTTPException(status_code=404, detail="下一实验场景不存在")
+        out = match_out(db, successor, current_user, next_scene, resumed=True)
+    else:
+        out = match_out(db, match, current_user, scene)
     db.commit()
     return out
 
@@ -189,6 +245,14 @@ def submit_choice(
     match = db.get(PvpMatch, match_id)
     if match is None or seat_of(match, current_user.id) is None:
         raise HTTPException(status_code=404, detail="对局不存在")
+    if match.status != "playing":
+        successor = _successor_for(db, match, current_user.id)
+        if successor is not None:
+            next_scene = db.get(ExperimentScene, successor.scene_id)
+            if next_scene is None:
+                raise HTTPException(status_code=404, detail="下一实验场景不存在")
+            return match_out(db, successor, current_user, next_scene, resumed=True)
+        raise HTTPException(status_code=400, detail="对局已结束或尚未开始")
     scene = db.get(ExperimentScene, match.scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail="场景不存在")
@@ -203,6 +267,12 @@ def submit_choice(
 
     if match.status != "playing":
         db.commit()
+        successor = _successor_for(db, match, current_user.id)
+        if successor is not None:
+            next_scene = db.get(ExperimentScene, successor.scene_id)
+            if next_scene is None:
+                raise HTTPException(status_code=404, detail="下一实验场景不存在")
+            return match_out(db, successor, current_user, next_scene, resumed=True)
         raise HTTPException(status_code=400, detail="对局已结束或尚未开始")
 
     if match.current_round != expected_round:
@@ -216,6 +286,11 @@ def submit_choice(
 
     seat = seat_of(match, current_user.id)
     choice = body.choice.upper()
+    now = datetime.now(UTC).replace(tzinfo=None)
+    started_at = rnd.started_at
+    if started_at.tzinfo is not None:
+        started_at = started_at.astimezone(UTC).replace(tzinfo=None)
+    decision_ms = max(0, int((now - started_at).total_seconds() * 1000))
     if seat == "a":
         if rnd.choice_a is not None:
             db.commit()
@@ -227,7 +302,23 @@ def submit_choice(
             raise HTTPException(status_code=400, detail="本轮已提交过选择")
         rnd.choice_b = choice
 
+    db.add(
+        PvpDecisionTelemetry(
+            match_id=match.id,
+            round_no=rnd.round_no,
+            user_id=current_user.id,
+            decision_ms=decision_ms,
+            submitted_at=now,
+        )
+    )
+
     maybe_resolve_round(db, match)
     db.commit()
     db.refresh(match)
+    successor = _successor_for(db, match, current_user.id) if match.status == "finished" else None
+    if successor is not None:
+        next_scene = db.get(ExperimentScene, successor.scene_id)
+        if next_scene is None:
+            raise HTTPException(status_code=404, detail="下一实验场景不存在")
+        return match_out(db, successor, current_user, next_scene)
     return match_out(db, match, current_user, scene)

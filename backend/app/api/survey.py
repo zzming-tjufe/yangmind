@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.config import settings
 from app.data.bfi44_seed import INSTRUMENT_CODE
 from app.models.survey import (
     PersonalityScore,
@@ -13,6 +16,7 @@ from app.models.survey import (
     SurveyInstrument,
     SurveyItem,
     SurveyResponse,
+    SurveyQualityTelemetry,
 )
 from app.models.user import User
 from app.schemas.survey import (
@@ -199,7 +203,7 @@ def my_response(
         answers={str(k): v for k, v in amap.items()},
         personality=personality,
         quality_passed=response.quality_passed if feedback_unlocked else None,
-        unlock_games=response.status == "submitted",
+        unlock_games=response.status == "submitted" and response.quality_passed is True,
         feedback_unlocked=feedback_unlocked,
     )
 
@@ -306,6 +310,40 @@ def submit(
         duration_seconds=_elapsed_seconds(draft.started_at),
         attention_answers=attention_answers,
     )
+    expected_diligence_ids = {"diligence_read", "diligence_authentic", "diligence_technical"}
+    diligence_answers = {item.check_id: item.value for item in body.diligence_answers}
+    if set(diligence_answers) != expected_diligence_ids:
+        raise HTTPException(status_code=400, detail="请完成全部作答质量确认题")
+
+    device_hash = None
+    if body.device_token:
+        device_hash = hmac.new(
+            settings.secret_key.encode("utf-8"),
+            body.device_token.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+    duplicate_device = bool(
+        device_hash
+        and db.query(SurveyQualityTelemetry.id)
+        .filter(
+            SurveyQualityTelemetry.device_hash == device_hash,
+            SurveyQualityTelemetry.user_id != current_user.id,
+        )
+        .first()
+    )
+    soft_flags = list(flags.get("triggered_categories") or [])
+    if diligence_answers["diligence_read"] <= 2 or diligence_answers["diligence_authentic"] <= 2:
+        soft_flags.append("self_report_low_diligence")
+    if diligence_answers["diligence_technical"] >= 4:
+        soft_flags.append("self_report_technical_issue")
+    if body.blur_count >= 10:
+        soft_flags.append("frequent_focus_loss")
+    if duplicate_device:
+        soft_flags.append("duplicate_device_review")
+    soft_flags = list(dict.fromkeys(soft_flags))
+    hard_reasons = []
+    if len(flags.get("attention_failed") or []) == len(ATTENTION_CHECKS):
+        hard_reasons.append("all_attention_checks_failed")
 
     draft.status = "submitted"
     draft.submitted_at = datetime.now(UTC)
@@ -323,6 +361,24 @@ def submit(
         summary_label=build_summary_label(scores),
     )
     db.add(personality)
+    db.add(
+        SurveyQualityTelemetry(
+            response_id=draft.id,
+            user_id=current_user.id,
+            attention_answers=attention_answers,
+            diligence_answers=diligence_answers,
+            page_timings_seconds={
+                str(key): round(float(value), 1)
+                for key, value in body.page_timings_seconds.items()
+            },
+            blur_count=body.blur_count,
+            device_hash=device_hash,
+            hard_exclusion=bool(hard_reasons),
+            hard_exclusion_reasons=hard_reasons,
+            soft_flags=soft_flags,
+            admin_review_status="pending" if soft_flags else "not_needed",
+        )
+    )
     db.commit()
 
     db.refresh(draft)
@@ -341,8 +397,8 @@ def submit(
         answered_count=44,
         answers={str(k): v for k, v in amap.items()},
         personality=None,
-        quality_passed=None,
-        unlock_games=True,
+        quality_passed=passed,
+        unlock_games=passed,
         feedback_unlocked=False,
     )
 

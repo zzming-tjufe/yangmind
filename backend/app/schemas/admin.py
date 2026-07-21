@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class LeaderboardEntry(BaseModel):
@@ -28,6 +28,13 @@ class AdminUserRow(BaseModel):
     quality_passed: bool | None = None
     has_personality: bool
     status: str = "active"
+    can_retake_survey: bool = False
+    retake_count: int = 0
+    retake_block_reason: str | None = None
+    has_submitted_survey: bool = False
+    quality_review_status: str | None = None
+    quality_soft_flags: list[str] = Field(default_factory=list)
+    quality_hard_exclusion: bool = False
 
 
 class AdminUsersOut(BaseModel):

@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import {
+  allowSurveyRetake,
   downloadAdminCsv,
   getAdminPersonality,
   getAdminStats,
   getAdminUsers,
+  getSurveyQualityReview,
   resetUserPassword,
+  reviewSurveyQuality,
   setUserStatus,
   type AdminPersonality,
   type AdminStats,
   type AdminUser,
+  type SurveyQualityReview,
 } from "../api/admin";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -23,6 +27,9 @@ export function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [q, setQ] = useState("");
   const [profile, setProfile] = useState<AdminPersonality | null>(null);
+  const [qualityReview, setQualityReview] = useState<SurveyQualityReview | null>(null);
+  const [qualityReviewUser, setQualityReviewUser] = useState<AdminUser | null>(null);
+  const [reviewReason, setReviewReason] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function load(search?: string) {
@@ -78,6 +85,58 @@ export function AdminUsersPage() {
       toast("密码已重置");
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "重置失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAllowRetake(u: AdminUser) {
+    const confirmed = window.confirm(
+      `确定授权「${u.nickname}」重新作答人格问卷吗？\n\n原正式答卷会留档，新答卷将成为后续分析使用的答卷。`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      const result = await allowSurveyRetake(u.id);
+      toast(`已授权重做（第 ${result.retake_count} 次），原答卷已归档`);
+      setProfile(null);
+      await load(q || undefined);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "授权失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openQualityReview(u: AdminUser) {
+    try {
+      const review = await getSurveyQualityReview(u.id);
+      setQualityReviewUser(u);
+      setQualityReview(review);
+      setReviewReason(review.review_reason || "");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "加载质量信息失败");
+    }
+  }
+
+  async function submitQualityReview(status: "kept" | "excluded") {
+    if (!qualityReviewUser) return;
+    if (reviewReason.trim().length < 2) {
+      toast("请填写至少 2 个字的复核理由");
+      return;
+    }
+    setBusy(true);
+    try {
+      const review = await reviewSurveyQuality(
+        qualityReviewUser.id,
+        status,
+        reviewReason.trim(),
+      );
+      setQualityReview(review);
+      toast(status === "kept" ? "已复核为保留答卷" : "已复核为排除答卷");
+      await load(q || undefined);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "复核失败");
     } finally {
       setBusy(false);
     }
@@ -207,6 +266,24 @@ export function AdminUsersPage() {
               <button className="secondary" type="button" disabled={busy} onClick={() => onResetPassword(u)}>
                 重置密码
               </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy || !u.can_retake_survey}
+                title={u.retake_block_reason || "原答卷会留档，授权后用户可重新作答一次"}
+                onClick={() => onAllowRetake(u)}
+              >
+                授权重做{u.retake_count ? `（${u.retake_count}）` : ""}
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy || !u.has_submitted_survey}
+                onClick={() => openQualityReview(u)}
+              >
+                质量复核
+                {u.quality_review_status === "pending" ? " · 待处理" : ""}
+              </button>
             </div>
           </div>
         ))}
@@ -257,6 +334,59 @@ export function AdminUsersPage() {
                     <p>{d.band_text}</p>
                   </article>
                 ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {qualityReview && qualityReviewUser && (
+        <div className="profile-overlay" onClick={() => setQualityReview(null)}>
+          <section className="profile-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <header className="profile-modal-head">
+              <div className="profile-person">
+                <i>{qualityReviewUser.nickname.slice(0, 1)}</i>
+                <div>
+                  <b>{qualityReviewUser.nickname} · 问卷质量复核</b>
+                  <small>答卷 #{qualityReview.response_id} · {qualityReview.review_status}</small>
+                </div>
+              </div>
+              <button type="button" onClick={() => setQualityReview(null)} aria-label="关闭">×</button>
+            </header>
+            <div className="profile-modal-body">
+              <div className="quality-fail-banner" role="status">
+                <b>{qualityReview.hard_exclusion ? "存在硬性排除原因" : "质量信号汇总"}</b>
+                <span>
+                  软标记：{qualityReview.soft_flags.join("、") || "无"}；失焦次数：
+                  {qualityReview.blur_count}
+                </span>
+              </div>
+              <div className="personality-scores">
+                <article className="score-card">
+                  <div className="score-title"><b>注意力题原始选择</b></div>
+                  <p>{JSON.stringify(qualityReview.attention_answers)}</p>
+                </article>
+                <article className="score-card">
+                  <div className="score-title"><b>自报认真程度</b></div>
+                  <p>{JSON.stringify(qualityReview.diligence_answers)}</p>
+                </article>
+                <article className="score-card">
+                  <div className="score-title"><b>各组作答时间（秒）</b></div>
+                  <p>{JSON.stringify(qualityReview.page_timings_seconds)}</p>
+                </article>
+              </div>
+              <label className="field" style={{ marginTop: 16 }}>
+                复核理由
+                <textarea
+                  rows={3}
+                  value={reviewReason}
+                  onChange={(event) => setReviewReason(event.target.value)}
+                  placeholder="例如：注意力题正确、总时长正常，保留答卷"
+                />
+              </label>
+              <div className="export-actions" style={{ marginTop: 14 }}>
+                <button className="primary" type="button" disabled={busy} onClick={() => submitQualityReview("kept")}>保留答卷</button>
+                <button className="secondary" type="button" disabled={busy} onClick={() => submitQualityReview("excluded")}>排除答卷</button>
               </div>
             </div>
           </section>

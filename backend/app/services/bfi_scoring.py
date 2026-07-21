@@ -12,7 +12,7 @@ DIMENSION_NAMES = {
     "O": "开放",
 }
 
-QUALITY_RULE_VERSION = "2026-07-v1"
+QUALITY_RULE_VERSION = "2026-07-v2"
 
 # 独立注意力检测题，不参与 BFI-44 计分，也不改变标准题序。
 ATTENTION_CHECKS = [
@@ -126,13 +126,23 @@ def check_quality(
     ]
 
     categories: list[str] = []
-    pattern_triggered = max_run >= 10 or dominant_share >= 0.80 or response_sd < 0.50
-    if pattern_triggered:
-        categories.append("response_pattern")
+    response_behavior_reasons: list[str] = []
+    if max_run >= 10:
+        response_behavior_reasons.append("longstring")
+    if dominant_share >= 0.80:
+        response_behavior_reasons.append("dominant_option")
+    if response_sd < 0.50:
+        response_behavior_reasons.append("low_variability")
+    consistency_triggered = mean_pair_gap >= 2.5 or large_pair_gaps >= 4
+    if consistency_triggered:
+        response_behavior_reasons.append("inconsistent_pairs")
+
+    # 连续同答、低变异与正反题不一致可能由同一种作答模式共同造成，
+    # 因此合并为一个证据类别，避免对人格问卷中的真实低变异反应重复计数。
+    if response_behavior_reasons:
+        categories.append("response_behavior")
     if duration_seconds is not None and duration_seconds < 120:
         categories.append("very_fast")
-    if mean_pair_gap >= 2.5 or large_pair_gaps >= 4:
-        categories.append("inconsistent_pairs")
     if attention_failed:
         categories.append("attention_check")
 
@@ -148,6 +158,7 @@ def check_quality(
         round(max(duration_seconds, 0), 1) if duration_seconds is not None else None
     )
     flags["attention_failed"] = attention_failed
+    flags["response_behavior_reasons"] = response_behavior_reasons
     flags["triggered_categories"] = categories
     flags["review_recommended"] = bool(categories)
     return passed, flags

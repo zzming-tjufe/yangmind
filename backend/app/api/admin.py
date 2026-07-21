@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_admin, get_current_super_admin
@@ -21,8 +22,15 @@ from app.core.security import hash_password
 from app.data.personality_meta import PERSONALITY_META, personality_band
 from app.models.admin_extra import AccountEvent, InviteCode
 from app.models.cms import Announcement, ContentBlock, PageConfig
-from app.models.game import Experiment, ExperimentScene, GameRound, GameSession
-from app.models.survey import SurveyAnswer, SurveyResponse
+from app.models.game import Experiment, ExperimentScene, GameComprehension, GameRound, GameSession
+from app.models.match import PvpDecisionTelemetry, PvpMatch
+from app.models.survey import (
+    PersonalityScore,
+    SurveyAnswer,
+    SurveyQualityTelemetry,
+    SurveyResponse,
+    SurveyRetakeArchive,
+)
 from app.models.user import User
 from app.schemas.admin import (
     AdminPersonalityOut,
@@ -66,6 +74,31 @@ def _log_event(
     )
 
 
+def _survey_retake_state(db: Session, user_id: int) -> tuple[bool, int, str | None]:
+    response = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.user_id == user_id)
+        .order_by(SurveyResponse.id.desc())
+        .first()
+    )
+    retake_count = (
+        db.query(SurveyRetakeArchive)
+        .filter(SurveyRetakeArchive.user_id == user_id)
+        .count()
+    )
+    if response is None or response.status != "submitted":
+        return False, retake_count, "用户尚未正式提交问卷"
+    has_session = db.query(GameSession.id).filter(GameSession.user_id == user_id).first()
+    has_match = (
+        db.query(PvpMatch.id)
+        .filter(or_(PvpMatch.user_a_id == user_id, PvpMatch.user_b_id == user_id))
+        .first()
+    )
+    if has_session or has_match:
+        return False, retake_count, "用户已进入博弈，为避免污染前测数据不能重做"
+    return True, retake_count, None
+
+
 # ---------- 概览 / 用户 ----------
 
 
@@ -89,6 +122,20 @@ def list_users(
     for u in users:
         total, sessions = user_game_stats(db, u.id)
         personality = latest_personality(db, u.id)
+        can_retake, retake_count, retake_block_reason = _survey_retake_state(db, u.id)
+        submitted_response = (
+            db.query(SurveyResponse)
+            .filter(SurveyResponse.user_id == u.id, SurveyResponse.status == "submitted")
+            .order_by(SurveyResponse.id.desc())
+            .first()
+        )
+        quality_telemetry = (
+            db.query(SurveyQualityTelemetry)
+            .filter(SurveyQualityTelemetry.response_id == submitted_response.id)
+            .first()
+            if submitted_response
+            else None
+        )
         items.append(
             AdminUserRow(
                 id=u.id,
@@ -103,6 +150,13 @@ def list_users(
                 quality_passed=survey_quality_passed_for_user(db, u.id),
                 has_personality=personality is not None,
                 status=u.status,
+                can_retake_survey=can_retake,
+                retake_count=retake_count,
+                retake_block_reason=retake_block_reason,
+                has_submitted_survey=submitted_response is not None,
+                quality_review_status=(quality_telemetry.admin_review_status if quality_telemetry else None),
+                quality_soft_flags=list(quality_telemetry.soft_flags or []) if quality_telemetry else [],
+                quality_hard_exclusion=bool(quality_telemetry and quality_telemetry.hard_exclusion),
             )
         )
     return AdminUsersOut(total=len(items), items=items)
@@ -162,6 +216,212 @@ def reset_user_password(
     )
     db.commit()
     return {"ok": True}
+
+
+@router.post("/users/{user_id}/allow-survey-retake")
+def allow_survey_retake(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """管理员核实技术故障后授权重做；原答卷完整归档且禁止博弈后重测。"""
+    user = db.get(User, user_id)
+    assert_can_manage_participant(db, admin, user)
+    can_retake, retake_count, block_reason = _survey_retake_state(db, user_id)
+    if not can_retake:
+        raise HTTPException(status_code=400, detail=block_reason or "当前不能授权重做")
+
+    response = (
+        db.query(SurveyResponse)
+        .options(joinedload(SurveyResponse.answers), joinedload(SurveyResponse.personality_score))
+        .filter(SurveyResponse.user_id == user_id, SurveyResponse.status == "submitted")
+        .order_by(SurveyResponse.id.desc())
+        .first()
+    )
+    if response is None:
+        raise HTTPException(status_code=400, detail="用户尚未正式提交问卷")
+
+    personality = response.personality_score
+    telemetry = (
+        db.query(SurveyQualityTelemetry)
+        .filter(SurveyQualityTelemetry.response_id == response.id)
+        .first()
+    )
+    snapshot = {
+        "response": {
+            "id": response.id,
+            "instrument_version": response.instrument_version,
+            "started_at": response.started_at.isoformat() if response.started_at else None,
+            "submitted_at": response.submitted_at.isoformat() if response.submitted_at else None,
+            "quality_flags": response.quality_flags,
+            "quality_passed": response.quality_passed,
+        },
+        "answers": [
+            {"item_no": answer.item_no, "value": answer.value}
+            for answer in sorted(response.answers, key=lambda item: item.item_no)
+        ],
+        "personality": None
+        if personality is None
+        else {
+            "e": personality.e,
+            "a": personality.a,
+            "c": personality.c,
+            "n": personality.n,
+            "o": personality.o,
+            "summary_label": personality.summary_label,
+        },
+        "quality_telemetry": None
+        if telemetry is None
+        else {
+            "attention_answers": telemetry.attention_answers,
+            "diligence_answers": telemetry.diligence_answers,
+            "page_timings_seconds": telemetry.page_timings_seconds,
+            "blur_count": telemetry.blur_count,
+            "hard_exclusion": telemetry.hard_exclusion,
+            "hard_exclusion_reasons": telemetry.hard_exclusion_reasons,
+            "soft_flags": telemetry.soft_flags,
+            "admin_review_status": telemetry.admin_review_status,
+            "admin_review_reason": telemetry.admin_review_reason,
+        },
+    }
+    db.add(
+        SurveyRetakeArchive(
+            user_id=user_id,
+            instrument_id=response.instrument_id,
+            original_response_id=response.id,
+            retake_no=retake_count + 1,
+            authorized_by_user_id=admin.id,
+            response_snapshot=snapshot,
+        )
+    )
+    db.query(PersonalityScore).filter(PersonalityScore.response_id == response.id).delete(
+        synchronize_session=False
+    )
+    db.query(SurveyAnswer).filter(SurveyAnswer.response_id == response.id).delete(
+        synchronize_session=False
+    )
+    db.query(SurveyQualityTelemetry).filter(
+        SurveyQualityTelemetry.response_id == response.id
+    ).delete(synchronize_session=False)
+    response.status = "in_progress"
+    response.started_at = datetime.now(UTC)
+    response.submitted_at = None
+    response.quality_flags = None
+    response.quality_passed = None
+    _log_event(
+        db,
+        event_type="admin_allow_survey_retake",
+        detail=f"授权 {user.nickname}（{user.public_id}）重新作答 BFI-44；原答卷已归档",
+        user_id=user.id,
+        actor_id=admin.id,
+    )
+    db.commit()
+    return {"ok": True, "retake_count": retake_count + 1}
+
+
+class SurveyQualityReviewOut(BaseModel):
+    user_id: int
+    response_id: int
+    quality_passed: bool | None
+    quality_flags: dict | None
+    attention_answers: dict
+    diligence_answers: dict
+    page_timings_seconds: dict
+    blur_count: int
+    hard_exclusion: bool
+    hard_exclusion_reasons: list[str]
+    soft_flags: list[str]
+    review_status: str
+    review_reason: str | None = None
+
+
+class SurveyQualityReviewBody(BaseModel):
+    status: str = Field(pattern="^(kept|excluded)$")
+    reason: str = Field(min_length=2, max_length=500)
+
+
+def _quality_review_out(response: SurveyResponse, row: SurveyQualityTelemetry | None) -> SurveyQualityReviewOut:
+    return SurveyQualityReviewOut(
+        user_id=response.user_id,
+        response_id=response.id,
+        quality_passed=response.quality_passed,
+        quality_flags=response.quality_flags,
+        attention_answers=dict(row.attention_answers or {}) if row else {},
+        diligence_answers=dict(row.diligence_answers or {}) if row else {},
+        page_timings_seconds=dict(row.page_timings_seconds or {}) if row else {},
+        blur_count=row.blur_count if row else 0,
+        hard_exclusion=bool(row and row.hard_exclusion),
+        hard_exclusion_reasons=list(row.hard_exclusion_reasons or []) if row else [],
+        soft_flags=list(row.soft_flags or []) if row else [],
+        review_status=row.admin_review_status if row else "legacy_no_telemetry",
+        review_reason=row.admin_review_reason if row else None,
+    )
+
+
+@router.get("/users/{user_id}/survey-quality", response_model=SurveyQualityReviewOut)
+def get_survey_quality_review(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    user = db.get(User, user_id)
+    assert_can_manage_participant(db, admin, user)
+    response = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.user_id == user_id, SurveyResponse.status == "submitted")
+        .order_by(SurveyResponse.id.desc())
+        .first()
+    )
+    if response is None:
+        raise HTTPException(status_code=400, detail="该用户尚未正式提交问卷")
+    row = db.query(SurveyQualityTelemetry).filter(SurveyQualityTelemetry.response_id == response.id).first()
+    return _quality_review_out(response, row)
+
+
+@router.patch("/users/{user_id}/survey-quality-review", response_model=SurveyQualityReviewOut)
+def review_survey_quality(
+    user_id: int,
+    body: SurveyQualityReviewBody,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    user = db.get(User, user_id)
+    assert_can_manage_participant(db, admin, user)
+    response = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.user_id == user_id, SurveyResponse.status == "submitted")
+        .order_by(SurveyResponse.id.desc())
+        .first()
+    )
+    if response is None:
+        raise HTTPException(status_code=400, detail="该用户尚未正式提交问卷")
+    row = db.query(SurveyQualityTelemetry).filter(SurveyQualityTelemetry.response_id == response.id).first()
+    if row is None:
+        row = SurveyQualityTelemetry(
+            response_id=response.id,
+            user_id=user_id,
+            attention_answers={},
+            diligence_answers={},
+            page_timings_seconds={},
+            soft_flags=[],
+            hard_exclusion_reasons=[],
+        )
+        db.add(row)
+    row.admin_review_status = body.status
+    row.admin_review_reason = body.reason.strip()
+    row.reviewed_by_user_id = admin.id
+    row.reviewed_at = datetime.now(UTC)
+    response.quality_passed = body.status == "kept"
+    _log_event(
+        db,
+        event_type="admin_survey_quality_review",
+        detail=f"将 {user.nickname}（{user.public_id}）问卷复核为{body.status}：{body.reason.strip()}",
+        user_id=user.id,
+        actor_id=admin.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return _quality_review_out(response, row)
 
 
 @router.get("/users/{user_id}/personality", response_model=AdminPersonalityOut)
@@ -1025,6 +1285,10 @@ def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_su
 @router.get("/export/surveys.csv")
 def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
     header = [
+        "record_source",
+        "retake_no",
+        "authorized_by_public_id",
+        "archived_at",
         "user_public_id",
         "nickname",
         "email",
@@ -1032,6 +1296,15 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
         "status",
         "quality_passed",
         "quality_flags",
+        "attention_answers",
+        "diligence_answers",
+        "page_timings_seconds",
+        "blur_count",
+        "hard_exclusion",
+        "hard_exclusion_reasons",
+        "soft_flags",
+        "admin_review_status",
+        "admin_review_reason",
         "item_no",
         "value",
         "submitted_at",
@@ -1047,38 +1320,95 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
         user = db.get(User, resp.user_id)
         if user is None:
             continue
+        telemetry = (
+            db.query(SurveyQualityTelemetry)
+            .filter(SurveyQualityTelemetry.response_id == resp.id)
+            .first()
+        )
+        common = [
+            "current",
+            "",
+            "",
+            "",
+            user.public_id,
+            user.nickname,
+            user.email,
+            resp.id,
+            resp.status,
+            resp.quality_passed if resp.quality_passed is not None else "",
+            json.dumps(resp.quality_flags, ensure_ascii=False) if resp.quality_flags else "",
+            json.dumps(telemetry.attention_answers, ensure_ascii=False) if telemetry else "",
+            json.dumps(telemetry.diligence_answers, ensure_ascii=False) if telemetry else "",
+            json.dumps(telemetry.page_timings_seconds, ensure_ascii=False) if telemetry else "",
+            telemetry.blur_count if telemetry else "",
+            telemetry.hard_exclusion if telemetry else "",
+            json.dumps(telemetry.hard_exclusion_reasons, ensure_ascii=False) if telemetry else "",
+            json.dumps(telemetry.soft_flags, ensure_ascii=False) if telemetry else "",
+            telemetry.admin_review_status if telemetry else "",
+            telemetry.admin_review_reason if telemetry else "",
+        ]
         answers = sorted(resp.answers, key=lambda a: a.item_no)
         if not answers:
-            rows.append(
-                [
-                    user.public_id,
-                    user.nickname,
-                    user.email,
-                    resp.id,
-                    resp.status,
-                    resp.quality_passed if resp.quality_passed is not None else "",
-                    json.dumps(resp.quality_flags, ensure_ascii=False) if resp.quality_flags else "",
-                    "",
-                    "",
-                    resp.submitted_at.isoformat() if resp.submitted_at else "",
-                ]
-            )
+            rows.append([*common, "", "", resp.submitted_at.isoformat() if resp.submitted_at else ""])
             continue
         for a in answers:
-            rows.append(
-                [
-                    user.public_id,
-                    user.nickname,
-                    user.email,
-                    resp.id,
-                    resp.status,
-                    resp.quality_passed if resp.quality_passed is not None else "",
-                    json.dumps(resp.quality_flags, ensure_ascii=False) if resp.quality_flags else "",
-                    a.item_no,
-                    a.value,
-                    resp.submitted_at.isoformat() if resp.submitted_at else "",
-                ]
-            )
+            rows.append([*common, a.item_no, a.value, resp.submitted_at.isoformat() if resp.submitted_at else ""])
+    archives = db.query(SurveyRetakeArchive).order_by(SurveyRetakeArchive.id).all()
+    for archive in archives:
+        user = db.get(User, archive.user_id)
+        actor = db.get(User, archive.authorized_by_user_id)
+        if user is None:
+            continue
+        snapshot = archive.response_snapshot or {}
+        response_data = snapshot.get("response") or {}
+        telemetry_data = snapshot.get("quality_telemetry") or {}
+        answers = snapshot.get("answers") or []
+        common = [
+            "archived_before_retake",
+            archive.retake_no,
+            actor.public_id if actor else "",
+            archive.archived_at.isoformat() if archive.archived_at else "",
+            user.public_id,
+            user.nickname,
+            user.email,
+            archive.original_response_id,
+            "submitted",
+            response_data.get("quality_passed", ""),
+            json.dumps(response_data.get("quality_flags"), ensure_ascii=False)
+            if response_data.get("quality_flags")
+            else "",
+            json.dumps(telemetry_data.get("attention_answers"), ensure_ascii=False)
+            if telemetry_data.get("attention_answers")
+            else "",
+            json.dumps(telemetry_data.get("diligence_answers"), ensure_ascii=False)
+            if telemetry_data.get("diligence_answers")
+            else "",
+            json.dumps(telemetry_data.get("page_timings_seconds"), ensure_ascii=False)
+            if telemetry_data.get("page_timings_seconds")
+            else "",
+            telemetry_data.get("blur_count", ""),
+            telemetry_data.get("hard_exclusion", ""),
+            json.dumps(telemetry_data.get("hard_exclusion_reasons"), ensure_ascii=False)
+            if telemetry_data.get("hard_exclusion_reasons")
+            else "",
+            json.dumps(telemetry_data.get("soft_flags"), ensure_ascii=False)
+            if telemetry_data.get("soft_flags")
+            else "",
+            telemetry_data.get("admin_review_status", ""),
+            telemetry_data.get("admin_review_reason", ""),
+        ]
+        if not answers:
+            rows.append([*common, "", "", response_data.get("submitted_at") or ""])
+        else:
+            for answer in answers:
+                rows.append(
+                    [
+                        *common,
+                        answer.get("item_no", ""),
+                        answer.get("value", ""),
+                        response_data.get("submitted_at") or "",
+                    ]
+                )
     stamp = datetime.now(UTC).strftime("%Y%m%d")
     return _csv_response(f"yangmind_surveys_{stamp}.csv", rows)
 
@@ -1089,6 +1419,16 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
         "user_public_id",
         "nickname",
         "session_id",
+        "match_id",
+        "mode",
+        "opponent_public_id",
+        "my_survey_quality_passed",
+        "opponent_survey_quality_passed",
+        "my_comprehension_passed",
+        "opponent_comprehension_passed",
+        "game_quality_passed",
+        "first_completed_for_both",
+        "analysis_eligible",
         "experiment_id",
         "scene_key",
         "session_status",
@@ -1099,6 +1439,12 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
         "opponent_points",
         "session_my_score",
         "session_opponent_score",
+        "my_timed_out",
+        "opponent_timed_out",
+        "my_decision_ms",
+        "opponent_decision_ms",
+        "round_started_at",
+        "round_resolved_at",
     ]
     rows: list[list] = [header]
     sessions = (
@@ -1113,12 +1459,125 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
             continue
         scene_key = sess.scene.scene_key if sess.scene else ""
         rounds = sorted(sess.rounds, key=lambda r: r.round_no)
+        match = (
+            db.query(PvpMatch)
+            .options(joinedload(PvpMatch.rounds))
+            .filter(
+                or_(
+                    PvpMatch.session_a_id == sess.id,
+                    PvpMatch.session_b_id == sess.id,
+                )
+            )
+            .first()
+        )
+        opponent_id = None
+        if match is not None:
+            opponent_id = (
+                match.user_b_id if match.session_a_id == sess.id else match.user_a_id
+            )
+        opponent = db.get(User, opponent_id) if opponent_id else None
+        opponent_session_id = None
+        if match is not None:
+            opponent_session_id = (
+                match.session_b_id if match.session_a_id == sess.id else match.session_a_id
+            )
+        my_quality = survey_quality_passed_for_user(db, user.id)
+        opponent_quality = (
+            survey_quality_passed_for_user(db, opponent_id) if opponent_id else None
+        )
+        my_comprehension = (
+            db.query(GameComprehension)
+            .filter(
+                GameComprehension.user_id == user.id,
+                GameComprehension.experiment_id == sess.experiment_id,
+            )
+            .first()
+        )
+        opponent_comprehension = (
+            db.query(GameComprehension)
+            .filter(
+                GameComprehension.user_id == opponent_id,
+                GameComprehension.experiment_id == sess.experiment_id,
+            )
+            .first()
+            if opponent_id
+            else None
+        )
+        my_understood = bool(my_comprehension and my_comprehension.passed)
+        opponent_understood = bool(
+            opponent_comprehension and opponent_comprehension.passed
+        )
+        pvp_rounds = {
+            round_row.round_no: round_row for round_row in (match.rounds if match else [])
+        }
+        complete_without_timeout = bool(
+            match is not None
+            and sess.mode == "matched"
+            and sess.status == "finished"
+            and match.status == "finished"
+            and len(pvp_rounds) == match.rounds_total
+            and all(
+                row.status == "resolved"
+                and not row.a_timed_out
+                and not row.b_timed_out
+                for row in pvp_rounds.values()
+            )
+        )
+        first_my_session_id = (
+            db.query(GameSession.id)
+            .filter(
+                GameSession.user_id == user.id,
+                GameSession.experiment_id == sess.experiment_id,
+                GameSession.scene_id == sess.scene_id,
+                GameSession.mode == "matched",
+                GameSession.status == "finished",
+            )
+            .order_by(GameSession.id.asc())
+            .scalar()
+        )
+        first_opponent_session_id = None
+        if opponent_id:
+            first_opponent_session_id = (
+                db.query(GameSession.id)
+                .filter(
+                    GameSession.user_id == opponent_id,
+                    GameSession.experiment_id == sess.experiment_id,
+                    GameSession.scene_id == sess.scene_id,
+                    GameSession.mode == "matched",
+                    GameSession.status == "finished",
+                )
+                .order_by(GameSession.id.asc())
+                .scalar()
+            )
+        first_completed_for_both = bool(
+            match is not None
+            and sess.id == first_my_session_id
+            and opponent_session_id == first_opponent_session_id
+        )
+        analysis_eligible = bool(
+            complete_without_timeout
+            and first_completed_for_both
+            and my_quality is True
+            and opponent_quality is True
+            and my_understood
+            and opponent_understood
+        )
         if not rounds:
             rows.append(
                 [
                     user.public_id,
                     user.nickname,
                     sess.id,
+                    match.id if match else "",
+                    sess.mode,
+                    opponent.public_id if opponent else "",
+                    my_quality if my_quality is not None else "",
+                    opponent_quality if opponent_quality is not None else "",
+                    my_understood,
+                    opponent_understood,
+                    complete_without_timeout,
+                    first_completed_for_both,
+                    analysis_eligible,
                     sess.experiment_id,
                     scene_key,
                     sess.status,
@@ -1129,15 +1588,56 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
                     "",
                     sess.my_score,
                     sess.opponent_score,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
                 ]
             )
             continue
         for r in rounds:
+            pvp_round = pvp_rounds.get(r.round_no)
+            is_a = bool(match and match.session_a_id == sess.id)
+            my_decision_ms = ""
+            opponent_decision_ms = ""
+            if match is not None and opponent_id is not None:
+                my_decision_ms = (
+                    db.query(PvpDecisionTelemetry.decision_ms)
+                    .filter(
+                        PvpDecisionTelemetry.match_id == match.id,
+                        PvpDecisionTelemetry.round_no == r.round_no,
+                        PvpDecisionTelemetry.user_id == sess.user_id,
+                    )
+                    .scalar()
+                    or ""
+                )
+                opponent_decision_ms = (
+                    db.query(PvpDecisionTelemetry.decision_ms)
+                    .filter(
+                        PvpDecisionTelemetry.match_id == match.id,
+                        PvpDecisionTelemetry.round_no == r.round_no,
+                        PvpDecisionTelemetry.user_id == opponent_id,
+                    )
+                    .scalar()
+                    or ""
+                )
             rows.append(
                 [
                     user.public_id,
                     user.nickname,
                     sess.id,
+                    match.id if match else "",
+                    sess.mode,
+                    opponent.public_id if opponent else "",
+                    my_quality if my_quality is not None else "",
+                    opponent_quality if opponent_quality is not None else "",
+                    my_understood,
+                    opponent_understood,
+                    complete_without_timeout,
+                    first_completed_for_both,
+                    analysis_eligible,
                     sess.experiment_id,
                     scene_key,
                     sess.status,
@@ -1148,6 +1648,16 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
                     r.opponent_points,
                     sess.my_score,
                     sess.opponent_score,
+                    (
+                        pvp_round.a_timed_out if is_a else pvp_round.b_timed_out
+                    ) if pvp_round else "",
+                    (
+                        pvp_round.b_timed_out if is_a else pvp_round.a_timed_out
+                    ) if pvp_round else "",
+                    my_decision_ms,
+                    opponent_decision_ms,
+                    pvp_round.started_at.isoformat() if pvp_round and pvp_round.started_at else "",
+                    pvp_round.resolved_at.isoformat() if pvp_round and pvp_round.resolved_at else "",
                 ]
             )
     stamp = datetime.now(UTC).strftime("%Y%m%d")
