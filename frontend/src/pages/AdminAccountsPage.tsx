@@ -6,6 +6,7 @@ import {
   getAccountEvents,
   getInviteCodes,
   getSubAdmins,
+  setUserStatus,
   toggleInviteCode,
   type AccountEvent,
   type InviteCode,
@@ -85,11 +86,27 @@ export function AdminAccountsPage() {
     }
   }
 
+  async function toggleSubAdmin(s: SubAdmin) {
+    const next = s.status === "active" ? "disabled" : "active";
+    setBusy(true);
+    try {
+      await setUserStatus(s.id, next);
+      await load();
+      toast(next === "active" ? "已启用子管理员" : "已禁用子管理员");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function copyCode(text: string) {
     const ok = await copyText(text);
     if (ok) toast("邀请码已复制");
     else toast(`复制失败，请手动复制：${text}`);
   }
+
+  const activeSubAdmins = subAdmins.filter((s) => s.status === "active");
 
   return (
     <div className="page">
@@ -107,8 +124,8 @@ export function AdminAccountsPage() {
           </article>
           <article className="setting card">
             <i>⌁</i>
-            <h3>登录安全</h3>
-            <p>禁用账号后将无法登录。可在「用户数据」中启用/禁用或重置密码。</p>
+            <h3>子管账号</h3>
+            <p>下方「子管理员」列表可查看谁用了哪张子管码，并启用/禁用其登录。</p>
           </article>
         </div>
       ) : (
@@ -159,7 +176,7 @@ export function AdminAccountsPage() {
                   onChange={(e) => setOwnerId(e.target.value === "" ? "" : Number(e.target.value))}
                 >
                   <option value="">暂不分配</option>
-                  {subAdmins.map((s) => (
+                  {activeSubAdmins.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.nickname} · {s.email}
                     </option>
@@ -174,23 +191,82 @@ export function AdminAccountsPage() {
         </section>
       ) : null}
 
+      {superAdmin ? (
+        <section className="table card" style={{ marginTop: 18 }}>
+          <div className="tablehead">
+            <h3>子管理员</h3>
+            <span style={{ opacity: 0.65, fontSize: 13 }}>{subAdmins.length} 人</span>
+          </div>
+          <div
+            className="row header sub-admin-head"
+            style={{ gridTemplateColumns: "1fr 1.2fr 0.9fr 0.8fr 0.7fr 0.8fr" }}
+          >
+            <span>昵称 / ID</span>
+            <span>邮箱</span>
+            <span>注册所用子管码</span>
+            <span>名下员工码</span>
+            <span>状态</span>
+            <span>操作</span>
+          </div>
+          {subAdmins.map((s) => (
+            <div
+              className="row sub-admin-row"
+              key={s.id}
+              style={{ gridTemplateColumns: "1fr 1.2fr 0.9fr 0.8fr 0.7fr 0.8fr" }}
+            >
+              <span>
+                <b>{s.nickname}</b>
+                <small style={{ display: "block", opacity: 0.7 }}>{s.public_id}</small>
+              </span>
+              <span>{s.email}</span>
+              <span>{s.invite_code || "—"}</span>
+              <span>{s.owned_invite_count ?? 0}</span>
+              <span className={`badge ${s.status === "active" ? "" : "warn"}`}>
+                {s.status === "active" ? "正常" : "已禁用"}
+              </span>
+              <div>
+                <button className="secondary" type="button" disabled={busy} onClick={() => toggleSubAdmin(s)}>
+                  {s.status === "active" ? "禁用" : "启用"}
+                </button>
+              </div>
+            </div>
+          ))}
+          {subAdmins.length === 0 && (
+            <div className="row" style={{ gridTemplateColumns: "1fr" }}>
+              <span>暂无子管理员。创建「子管邀请码」后，对方注册即可出现在此列表。</span>
+            </div>
+          )}
+        </section>
+      ) : null}
+
       <section className="table card" style={{ marginTop: 18 }}>
         <div className="tablehead">
           <h3>{superAdmin ? "邀请码列表" : "可转发的员工邀请码"}</h3>
         </div>
-        <div className="row header invite-head" style={{ gridTemplateColumns: superAdmin ? "1.1fr 0.9fr 0.8fr 0.7fr 1fr 1.2fr" : "1.2fr 0.9fr 0.7fr 1fr 0.8fr" }}>
+        <div
+          className="row header invite-head"
+          style={{
+            gridTemplateColumns: superAdmin
+              ? "1.1fr 0.9fr 0.8fr 0.7fr 1fr 1.2fr"
+              : "1.2fr 0.9fr 0.7fr 1fr 0.8fr",
+          }}
+        >
           <span>邀请码</span>
           <span>类型</span>
           <span>用量</span>
           <span>状态</span>
-          {superAdmin ? <span>归属子管</span> : null}
+          {superAdmin ? <span>归属 / 注册人</span> : null}
           <span>操作</span>
         </div>
         {invites.map((inv) => (
           <div
             className="row invite-row"
             key={inv.id}
-            style={{ gridTemplateColumns: superAdmin ? "1.1fr 0.9fr 0.8fr 0.7fr 1fr 1.2fr" : "1.2fr 0.9fr 0.7fr 1fr 0.8fr" }}
+            style={{
+              gridTemplateColumns: superAdmin
+                ? "1.1fr 0.9fr 0.8fr 0.7fr 1fr 1.2fr"
+                : "1.2fr 0.9fr 0.7fr 1fr 0.8fr",
+            }}
           >
             <b>{inv.code}</b>
             <span>{inv.kind === "sub_admin" ? "子管码" : "员工码"}</span>
@@ -203,19 +279,22 @@ export function AdminAccountsPage() {
             </span>
             {superAdmin ? (
               inv.kind === "participant" ? (
-                <select
-                  value={inv.owner_id ?? ""}
-                  onChange={(e) => onAssign(inv, e.target.value)}
-                >
+                <select value={inv.owner_id ?? ""} onChange={(e) => onAssign(inv, e.target.value)}>
                   <option value="">未分配</option>
                   {subAdmins.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.nickname}
+                      {s.status !== "active" ? "（已禁用）" : ""}
                     </option>
                   ))}
                 </select>
               ) : (
-                <span>—</span>
+                <span>
+                  {subAdmins
+                    .filter((s) => s.invite_code_id === inv.id)
+                    .map((s) => s.nickname)
+                    .join("、") || "—"}
+                </span>
               )
             ) : null}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

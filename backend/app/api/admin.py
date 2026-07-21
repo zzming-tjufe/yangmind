@@ -32,6 +32,7 @@ from app.schemas.admin import (
 )
 from app.services.rbac_scope import (
     assert_can_manage_participant,
+    assert_can_manage_sub_admin,
     list_sub_admins,
     participant_query_for_staff,
 )
@@ -118,13 +119,17 @@ def set_user_status(
     admin: User = Depends(get_current_admin),
 ):
     user = db.get(User, user_id)
-    assert_can_manage_participant(db, admin, user)
+    if user is not None and user.role == ROLE_SUB:
+        assert_can_manage_sub_admin(admin, user)
+    else:
+        assert_can_manage_participant(db, admin, user)
     user.status = body.status
     status_label = "正常启用" if body.status == "active" else "已禁用"
+    role_label = "子管理员" if user.role == ROLE_SUB else "员工"
     _log_event(
         db,
         event_type="admin_status_change",
-        detail=f"将 {user.nickname}（{user.public_id}）设为{status_label}",
+        detail=f"将{role_label} {user.nickname}（{user.public_id}）设为{status_label}",
         user_id=user.id,
         actor_id=admin.id,
     )
@@ -688,6 +693,40 @@ class SubAdminOut(BaseModel):
     nickname: str
     email: str
     public_id: str
+    status: str
+    invite_code: str | None = None
+    invite_code_id: int | None = None
+    owned_invite_count: int = 0
+    created_at: datetime | None = None
+
+
+def _sub_admin_out(db: Session, user: User) -> SubAdminOut:
+    invite_code = None
+    invite_code_id = user.invited_by_code_id
+    if invite_code_id:
+        inv = db.get(InviteCode, invite_code_id)
+        invite_code = inv.code if inv else None
+    owned_invite_count = (
+        db.query(InviteCode)
+        .filter(InviteCode.owner_id == user.id, InviteCode.kind == INVITE_KIND_PARTICIPANT)
+        .count()
+    )
+    return SubAdminOut(
+        id=user.id,
+        nickname=user.nickname,
+        email=user.email,
+        public_id=user.public_id,
+        status=user.status,
+        invite_code=invite_code,
+        invite_code_id=invite_code_id,
+        owned_invite_count=owned_invite_count,
+        created_at=user.created_at,
+    )
+
+
+@router.get("/sub-admins", response_model=list[SubAdminOut])
+def get_sub_admins(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
+    return [_sub_admin_out(db, u) for u in list_sub_admins(db)]
 
 
 def _invite_out(db: Session, row: InviteCode) -> InviteOut:
@@ -707,14 +746,6 @@ def _invite_out(db: Session, row: InviteCode) -> InviteOut:
         owner_nickname=owner_nickname,
         created_at=row.created_at,
     )
-
-
-@router.get("/sub-admins", response_model=list[SubAdminOut])
-def get_sub_admins(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
-    return [
-        SubAdminOut(id=u.id, nickname=u.nickname, email=u.email, public_id=u.public_id)
-        for u in list_sub_admins(db)
-    ]
 
 
 @router.get("/invite-codes", response_model=list[InviteOut])

@@ -41,5 +41,13 @@ def assert_can_manage_participant(db: Session, staff: User, target: User | None)
         raise HTTPException(status_code=403, detail="无权管理该用户")
 
 
+def assert_can_manage_sub_admin(staff: User, target: User | None) -> None:
+    """仅总管可启停子管理员账号。"""
+    if target is None or target.role != ROLE_SUB:
+        raise HTTPException(status_code=404, detail="子管理员不存在")
+    if not is_super_admin(staff):
+        raise HTTPException(status_code=403, detail="仅总管可管理子管理员")
+
+
 def list_sub_admins(db: Session) -> list[User]:
     return db.query(User).filter(User.role == ROLE_SUB).order_by(User.id.asc()).all()

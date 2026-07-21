@@ -38,6 +38,11 @@ class EdgeRegressionTests(unittest.TestCase):
     def test_public_id_comes_from_database_id(self):
         self.assertEqual(_public_id_for_user(1), "U-1001")
         self.assertEqual(_public_id_for_user(42), "U-1042")
+        # 注册占位 public_id 必须 ≤ 列宽 32
+        from uuid import uuid4
+
+        pending = f"P-{uuid4().hex[:28]}"
+        self.assertLessEqual(len(pending), 32)
 
     def test_duplicate_survey_item_is_rejected_before_database_write(self):
         with self.assertRaises(ValidationError):

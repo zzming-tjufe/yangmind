@@ -120,7 +120,8 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         user = User(
             # The final public id is derived from the database-generated primary key.
             # A unique placeholder lets concurrent inserts safely reach the first flush.
-            public_id=f"PENDING-{uuid4().hex}",
+            # 占位须 ≤ public_id 列宽（32）；正式值在 flush 后写成 U-{1000+id}
+            public_id=f"P-{uuid4().hex[:28]}",
             email=email,
             password_hash=hash_password(body.password),
             nickname=nickname,

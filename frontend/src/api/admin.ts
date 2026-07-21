@@ -97,6 +97,11 @@ export type SubAdmin = {
   nickname: string;
   email: string;
   public_id: string;
+  status: "active" | "disabled" | string;
+  invite_code?: string | null;
+  invite_code_id?: number | null;
+  owned_invite_count?: number;
+  created_at?: string | null;
 };
 
 export type AccountEvent = {
