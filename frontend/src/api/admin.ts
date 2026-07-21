@@ -358,6 +358,9 @@ export async function downloadAdminCsv(
   const match = disposition.match(/filename=\"?([^\";]+)\"?/);
   a.href = url;
   a.download = match?.[1] || `yangmind_${kind}.csv`;
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }

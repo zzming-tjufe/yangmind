@@ -13,6 +13,7 @@ import {
 } from "../api/admin";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { copyText } from "../lib/clipboard";
 import { isSuperAdmin } from "../lib/roles";
 
 export function AdminAccountsPage() {
@@ -85,12 +86,9 @@ export function AdminAccountsPage() {
   }
 
   async function copyCode(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast("邀请码已复制");
-    } catch {
-      toast(`邀请码：${text}`);
-    }
+    const ok = await copyText(text);
+    if (ok) toast("邀请码已复制");
+    else toast(`复制失败，请手动复制：${text}`);
   }
 
   return (
