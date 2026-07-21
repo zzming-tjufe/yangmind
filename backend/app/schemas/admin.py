@@ -25,6 +25,7 @@ class AdminUserRow(BaseModel):
     sessions_count: int
     personality_summary: str
     survey_status: str
+    quality_passed: bool | None = None
     has_personality: bool
     status: str = "active"
 
@@ -50,6 +51,7 @@ class AdminPersonalityOut(BaseModel):
     summary_label: str
     scores: dict[str, float]
     dimensions: list[DimensionDetail]
+    quality_passed: bool | None = None
 
 
 class AdminStatsOut(BaseModel):

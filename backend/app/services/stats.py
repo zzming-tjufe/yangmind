@@ -54,9 +54,32 @@ def survey_status_for_user(db: Session, user_id: int) -> str:
     submitted = (
         db.query(SurveyResponse)
         .filter(SurveyResponse.user_id == user_id, SurveyResponse.status == "submitted")
+        .order_by(SurveyResponse.id.desc())
         .first()
     )
-    return "已完成" if submitted else "未完成"
+    if submitted is None:
+        in_progress = (
+            db.query(SurveyResponse)
+            .filter(SurveyResponse.user_id == user_id, SurveyResponse.status == "in_progress")
+            .first()
+        )
+        return "作答中" if in_progress else "未完成"
+    if submitted.quality_passed is False:
+        return "质量未过"
+    return "已完成"
+
+
+def survey_quality_passed_for_user(db: Session, user_id: int) -> bool | None:
+    """已提交问卷的质量结果；未提交返回 None。"""
+    submitted = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.user_id == user_id, SurveyResponse.status == "submitted")
+        .order_by(SurveyResponse.id.desc())
+        .first()
+    )
+    if submitted is None:
+        return None
+    return submitted.quality_passed
 
 
 def _leaderboard_eligible_users(db: Session) -> list[User]:

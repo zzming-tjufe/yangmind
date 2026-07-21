@@ -162,17 +162,56 @@ journalctl -u yangmind-api -f
 
 ---
 
-## 8. 前端接上公网 API
+## 8. 前端（推荐：Nginx 同域反代，不必对外暴露 8003）
 
-GitHub → Settings → Secrets → Actions：
+浏览器只访问前端端口（如 **8081**），由 Nginx 把 `/api/` 转到本机 `8003`。这样校园网/公司网拦非标端口时也能注册登录。
 
-| Name | Value |
-|------|--------|
-| `VITE_API_BASE` | `http://你的公网IP:8003` |
+### Nginx（`/etc/nginx/sites-available/yangmind`）
 
-有域名且配了 HTTPS 更好，例如 `https://api.你的域名.com`（可用 Nginx + 免费证书，需要时再写一篇）。
+```nginx
+server {
+    listen 8081;
+    server_name 你的公网IP;
 
-然后跑 **Deploy frontend to GitHub Pages**。
+    root /opt/yangmind/frontend/dist;
+    index index.html;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:8003/health;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+```bash
+nginx -t && systemctl reload nginx
+```
+
+### 构建前端（同域，VITE_API_BASE 留空）
+
+```bash
+cd /opt/yangmind/frontend
+export VITE_API_BASE=
+export VITE_BASE=/
+npm install
+npm run build
+```
+
+验证：打开 `http://你的公网IP:8081/health` 应返回 JSON；注册时 Network 里请求应是 `8081/api/v1/...` 而不是 `:8003`。
+
+若仍用直连后端：`VITE_API_BASE=http://你的公网IP:8003`，并确保安全组放行 8003。
 
 管理员：`admin` / `1234asdF`。
 
@@ -210,6 +249,7 @@ systemctl restart yangmind-api
 | 现象 | 处理 |
 |------|------|
 | 外网打不开 `/health` | 安全组放行 8003；`uvicorn` 必须 `--host 0.0.0.0` |
+| 前端能开、注册提示连不上 | 优先用第 8 节 Nginx 同域反代；勿让浏览器直连 8003 |
 | 启动报 SECRET_KEY | `APP_ENV=production` 时密钥不能用默认短密钥 |
 | 连不上 Neon | URI 是否完整、是否 `sslmode=require`；服务器能否访问外网 |
 | 内存不够 | 几乎不会；用 `free -h` 看一下；不要本机再装 Postgres |

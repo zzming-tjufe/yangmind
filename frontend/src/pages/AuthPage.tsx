@@ -3,6 +3,13 @@ import { ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 
+function errorText(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  if (e instanceof Error && e.name === "ApiError") return e.message;
+  if (e instanceof Error && e.message) return e.message;
+  return "无法连接服务器，请稍后重试";
+}
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function AuthPage() {
@@ -57,11 +64,7 @@ export function AuthPage() {
       else await register(account, password, nickname.trim(), inviteCode.trim());
       toast(nextMode === "login" ? "登录成功" : "注册成功");
     } catch (e) {
-      toast(
-        e instanceof ApiError
-          ? e.message
-          : "无法连接服务器，请确认后端已在 8003 端口运行",
-      );
+      toast(errorText(e));
     } finally {
       setBusy(false);
     }

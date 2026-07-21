@@ -1,9 +1,14 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8003";
+// 空字符串 = 同域（经 Nginx 反代 /api）；未设置时本地默认直连 8003
+const API_BASE =
+  import.meta.env.VITE_API_BASE !== undefined
+    ? String(import.meta.env.VITE_API_BASE).replace(/\/$/, "")
+    : "http://127.0.0.1:8003";
 
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
+    this.name = "ApiError";
     this.status = status;
   }
 }
@@ -64,6 +69,10 @@ export function setToken(token: string | null) {
   else localStorage.removeItem("ym_token");
 }
 
+function isApiError(e: unknown): e is ApiError {
+  return e instanceof ApiError || (e instanceof Error && e.name === "ApiError");
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit & { json?: unknown } = {},
@@ -73,11 +82,20 @@ export async function api<T>(
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-    body: options.json !== undefined ? JSON.stringify(options.json) : options.body,
-  });
+  const url = `${API_BASE}${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers,
+      body: options.json !== undefined ? JSON.stringify(options.json) : options.body,
+    });
+  } catch {
+    const hint = API_BASE
+      ? `无法连接 API（${API_BASE}），请检查网络或稍后重试`
+      : "无法连接服务器，请稍后重试";
+    throw new ApiError(0, hint);
+  }
 
   if (!res.ok) {
     let detail = res.statusText;
@@ -94,4 +112,4 @@ export async function api<T>(
   return res.json() as Promise<T>;
 }
 
-export { API_BASE };
+export { API_BASE, isApiError };

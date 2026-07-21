@@ -8,4 +8,10 @@ const base = process.env.VITE_BASE || "/";
 export default defineConfig({
   plugins: [react()],
   base,
+  server: {
+    proxy: {
+      "/api": "http://127.0.0.1:8003",
+      "/health": "http://127.0.0.1:8003",
+    },
+  },
 });

@@ -32,6 +32,7 @@ export type AdminUser = {
   sessions_count: number;
   personality_summary: string;
   survey_status: string;
+  quality_passed: boolean | null;
   has_personality: boolean;
   status: string;
 };
@@ -50,6 +51,7 @@ export type AdminPersonality = {
     general: string;
     band_text: string;
   }[];
+  quality_passed?: boolean | null;
 };
 
 export type AdminScene = {

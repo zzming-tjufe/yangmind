@@ -171,8 +171,23 @@ export function AdminUsersPage() {
             <b>{u.total_score}</b>
             <span>{u.sessions_count}</span>
             <span>{u.personality_summary}</span>
-            <span className={`badge ${u.survey_status === "已完成" ? "" : "warn"}`}>
-              {u.survey_status}
+            <span
+              className={`badge ${
+                u.quality_passed === false || u.survey_status === "质量未过"
+                  ? "danger"
+                  : u.survey_status === "已完成"
+                    ? ""
+                    : "warn"
+              }`}
+              title={
+                u.quality_passed === false
+                  ? "该用户问卷未通过质量检查（可能未认真作答）"
+                  : undefined
+              }
+            >
+              {u.quality_passed === false || u.survey_status === "质量未过"
+                ? "质量未过"
+                : u.survey_status}
             </span>
             <span className={`badge ${u.status === "active" ? "" : "warn"}`}>
               {u.status === "active" ? "正常" : "已禁用"}
@@ -217,6 +232,12 @@ export function AdminUsersPage() {
               </button>
             </header>
             <div className="profile-modal-body">
+              {profile.quality_passed === false ? (
+                <div className="quality-fail-banner" role="alert">
+                  <b>质量检测未通过</b>
+                  <span>该用户问卷可能未认真作答，人格结果仅供参考，且未解锁博弈实验。</span>
+                </div>
+              ) : null}
               <div className="personality-scores">
                 {profile.dimensions.map((d) => (
                   <article className="score-card" key={d.code}>

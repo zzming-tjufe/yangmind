@@ -38,6 +38,7 @@ from app.services.rbac_scope import (
 from app.services.stats import (
     admin_overview_stats,
     latest_personality,
+    survey_quality_passed_for_user,
     survey_status_for_user,
     user_game_stats,
 )
@@ -97,6 +98,7 @@ def list_users(
                 sessions_count=sessions,
                 personality_summary=personality.summary_label if personality else "待生成",
                 survey_status=survey_status_for_user(db, u.id),
+                quality_passed=survey_quality_passed_for_user(db, u.id),
                 has_personality=personality is not None,
                 status=u.status,
             )
@@ -192,6 +194,7 @@ def user_personality(
         summary_label=personality.summary_label,
         scores=scores,
         dimensions=dimensions,
+        quality_passed=survey_quality_passed_for_user(db, user_id),
     )
 
 
