@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from statistics import pstdev
+
 DIMENSION_NAMES = {
     "E": "外向",
     "A": "宜人",
@@ -9,6 +11,39 @@ DIMENSION_NAMES = {
     "N": "情绪敏感",
     "O": "开放",
 }
+
+QUALITY_RULE_VERSION = "2026-07-v1"
+
+# 独立注意力检测题，不参与 BFI-44 计分，也不改变标准题序。
+ATTENTION_CHECKS = [
+    {
+        "check_id": "attention_1",
+        "stem": "为确认你正在认真阅读，本题请选择“比较同意”（4）。",
+        "expected_value": 4,
+    },
+    {
+        "check_id": "attention_2",
+        "stem": "这是一道作答确认题，请选择“比较不同意”（2）。",
+        "expected_value": 2,
+    },
+]
+
+# 语义方向相反的近似题对。反向转换后，两题应大致同向；只作为质量标记，
+# 不单独决定答卷无效，避免把真实人格差异误判为随意作答。
+CONSISTENCY_PAIRS = [
+    (1, False, 21, True),
+    (6, True, 36, False),
+    (16, False, 31, True),
+    (2, True, 17, False),
+    (12, True, 42, False),
+    (27, True, 32, False),
+    (3, False, 8, True),
+    (13, False, 23, True),
+    (18, True, 38, False),
+    (4, False, 9, True),
+    (14, False, 34, True),
+    (30, False, 41, True),
+]
 
 
 def scored_value(raw: int, reverse: bool) -> int:
@@ -49,13 +84,20 @@ def build_summary_label(scores: dict[str, float]) -> str:
     return " · ".join(high) if high else "均衡型"
 
 
-def check_quality(answers: dict[int, int]) -> tuple[bool, dict]:
+def check_quality(
+    answers: dict[int, int],
+    *,
+    duration_seconds: float | None = None,
+    attention_answers: dict[str, int] | None = None,
+) -> tuple[bool, dict]:
     """
-    简易质量检查：
-    - 是否有连续 10 题以上完全相同
+    多指标质量检查。
+
+    单个可疑指标只进入人工复核；同时命中两个独立类别，或两道注意力题
+    均答错，才判定未通过。这样能识别明显的随意作答，同时降低误伤。
     返回 (是否通过, 标记详情)
     """
-    flags: dict = {}
+    flags: dict = {"rule_version": QUALITY_RULE_VERSION}
     ordered = [answers[i] for i in range(1, 45)]
     run = 1
     max_run = 1
@@ -65,9 +107,47 @@ def check_quality(answers: dict[int, int]) -> tuple[bool, dict]:
             max_run = max(max_run, run)
         else:
             run = 1
-    if max_run >= 10:
-        flags["long_same_streak"] = max_run
+    unique_count = len(set(ordered))
+    response_sd = pstdev(ordered)
+    dominant_share = max(ordered.count(value) for value in range(1, 6)) / len(ordered)
 
-    passed = "long_same_streak" not in flags
+    pair_gaps = [
+        abs(scored_value(answers[a], reverse_a) - scored_value(answers[b], reverse_b))
+        for a, reverse_a, b, reverse_b in CONSISTENCY_PAIRS
+    ]
+    mean_pair_gap = sum(pair_gaps) / len(pair_gaps)
+    large_pair_gaps = sum(gap >= 3 for gap in pair_gaps)
+
+    attention_answers = attention_answers or {}
+    attention_failed = [
+        check["check_id"]
+        for check in ATTENTION_CHECKS
+        if attention_answers.get(check["check_id"]) != check["expected_value"]
+    ]
+
+    categories: list[str] = []
+    pattern_triggered = max_run >= 10 or dominant_share >= 0.80 or response_sd < 0.50
+    if pattern_triggered:
+        categories.append("response_pattern")
+    if duration_seconds is not None and duration_seconds < 120:
+        categories.append("very_fast")
+    if mean_pair_gap >= 2.5 or large_pair_gaps >= 4:
+        categories.append("inconsistent_pairs")
+    if attention_failed:
+        categories.append("attention_check")
+
+    passed = len(categories) < 2 and len(attention_failed) < len(ATTENTION_CHECKS)
+
     flags["max_same_streak"] = max_run
+    flags["unique_response_count"] = unique_count
+    flags["response_sd"] = round(response_sd, 3)
+    flags["dominant_option_share"] = round(dominant_share, 3)
+    flags["mean_consistency_pair_gap"] = round(mean_pair_gap, 3)
+    flags["large_consistency_pair_gaps"] = large_pair_gaps
+    flags["duration_seconds"] = (
+        round(max(duration_seconds, 0), 1) if duration_seconds is not None else None
+    )
+    flags["attention_failed"] = attention_failed
+    flags["triggered_categories"] = categories
+    flags["review_recommended"] = bool(categories)
     return passed, flags

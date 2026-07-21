@@ -19,12 +19,28 @@ from app.schemas.survey import (
     MyResponseOut,
     PersonalityScoreOut,
     SaveAnswersRequest,
+    SubmitSurveyRequest,
     SurveyInstrumentOut,
     SurveyItemOut,
+    QualityCheckOut,
 )
-from app.services.bfi_scoring import build_summary_label, check_quality, compute_dimension_scores
+from app.services.bfi_scoring import (
+    ATTENTION_CHECKS,
+    build_summary_label,
+    check_quality,
+    compute_dimension_scores,
+)
+from app.services.experiment_progress import personality_feedback_unlocked
 
 router = APIRouter(prefix="/api/v1/surveys", tags=["surveys"])
+
+
+def _elapsed_seconds(started_at: datetime | None) -> float | None:
+    if started_at is None:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    return max((datetime.now(UTC) - started_at).total_seconds(), 0)
 
 
 def _get_instrument(db: Session) -> SurveyInstrument:
@@ -50,11 +66,6 @@ def _get_or_create_draft(db: Session, user: User, instrument: SurveyInstrument) 
         .first()
     )
     if submitted:
-        if submitted.quality_passed is False:
-            raise HTTPException(
-                status_code=400,
-                detail="上次作答未通过质量检查，请先重新作答",
-            )
         raise HTTPException(status_code=400, detail="你已提交过 BFI-44，不能再修改答案")
 
     drafts = (
@@ -100,11 +111,6 @@ def _get_or_create_draft(db: Session, user: User, instrument: SurveyInstrument) 
         if existing is None:
             raise
         if existing.status == "submitted":
-            if existing.quality_passed is False:
-                raise HTTPException(
-                    status_code=400,
-                    detail="上次作答未通过质量检查，请先重新作答",
-                )
             raise HTTPException(status_code=400, detail="你已提交过 BFI-44，不能再修改答案")
         return existing
     db.refresh(draft)
@@ -132,6 +138,10 @@ def get_bfi44(
         item_count=instrument.item_count,
         items=[
             SurveyItemOut(item_no=i.item_no, stem=i.stem, sort_order=i.sort_order) for i in items
+        ],
+        quality_checks=[
+            QualityCheckOut(check_id=check["check_id"], stem=check["stem"])
+            for check in ATTENTION_CHECKS
         ],
     )
 
@@ -176,8 +186,11 @@ def my_response(
         return MyResponseOut(status="none", answered_count=0, unlock_games=False)
 
     amap = _answers_map(response)
+    feedback_unlocked = response.status == "submitted" and personality_feedback_unlocked(
+        db, current_user.id
+    )
     personality = None
-    if response.personality_score is not None:
+    if feedback_unlocked and response.personality_score is not None:
         personality = PersonalityScoreOut.model_validate(response.personality_score)
 
     return MyResponseOut(
@@ -185,8 +198,9 @@ def my_response(
         answered_count=len(amap),
         answers={str(k): v for k, v in amap.items()},
         personality=personality,
-        quality_passed=response.quality_passed,
-        unlock_games=response.status == "submitted" and response.quality_passed is True,
+        quality_passed=response.quality_passed if feedback_unlocked else None,
+        unlock_games=response.status == "submitted",
+        feedback_unlocked=feedback_unlocked,
     )
 
 
@@ -235,6 +249,7 @@ def save_answers(
 
 @router.post("/bfi-44/submit", response_model=MyResponseOut)
 def submit(
+    body: SubmitSurveyRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -251,11 +266,6 @@ def submit(
         .first()
     )
     if already:
-        if already.quality_passed is False:
-            raise HTTPException(
-                status_code=400,
-                detail="上次作答未通过质量检查，请先重新作答后再提交",
-            )
         raise HTTPException(status_code=400, detail="你已提交过 BFI-44")
 
     draft = (
@@ -287,7 +297,15 @@ def submit(
     )
     meta = [(i.item_no, i.dimension, i.reverse_scored) for i in items_meta]
     scores = compute_dimension_scores(amap, meta)
-    passed, flags = check_quality(amap)
+    allowed_check_ids = {check["check_id"] for check in ATTENTION_CHECKS}
+    attention_answers = {item.check_id: item.value for item in body.attention_answers}
+    if set(attention_answers) != allowed_check_ids:
+        raise HTTPException(status_code=400, detail="请完成全部作答确认题")
+    passed, flags = check_quality(
+        amap,
+        duration_seconds=_elapsed_seconds(draft.started_at),
+        attention_answers=attention_answers,
+    )
 
     draft.status = "submitted"
     draft.submitted_at = datetime.now(UTC)
@@ -322,9 +340,10 @@ def submit(
         status=draft.status,
         answered_count=44,
         answers={str(k): v for k, v in amap.items()},
-        personality=PersonalityScoreOut.model_validate(draft.personality_score),
-        quality_passed=draft.quality_passed,
-        unlock_games=draft.quality_passed is True,
+        personality=None,
+        quality_passed=None,
+        unlock_games=True,
+        feedback_unlocked=False,
     )
 
 
@@ -333,7 +352,7 @@ def retake(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """质量检查未通过时允许清空并重新作答（质量已通过不可重答）。"""
+    """正式答卷必须保留，避免获知质量结果后反复作答造成选择偏差。"""
     instrument = _get_instrument(db)
     response = (
         db.query(SurveyResponse)
@@ -350,24 +369,4 @@ def retake(
     )
     if response is None:
         raise HTTPException(status_code=400, detail="还没有问卷记录")
-    if response.status != "submitted":
-        raise HTTPException(status_code=400, detail="当前无需重新作答")
-    if response.quality_passed is True:
-        raise HTTPException(status_code=400, detail="质量检查已通过，不能重新作答")
-
-    db.query(PersonalityScore).filter(PersonalityScore.response_id == response.id).delete()
-    db.query(SurveyAnswer).filter(SurveyAnswer.response_id == response.id).delete()
-    response.status = "in_progress"
-    response.submitted_at = None
-    response.quality_passed = None
-    response.quality_flags = None
-    db.commit()
-
-    return MyResponseOut(
-        status="in_progress",
-        answered_count=0,
-        answers={},
-        personality=None,
-        quality_passed=None,
-        unlock_games=False,
-    )
+    raise HTTPException(status_code=400, detail="正式问卷已提交，不能重新作答")

@@ -26,6 +26,7 @@ export function BfiPage() {
   const [instrument, setInstrument] = useState<SurveyInstrument | null>(null);
   const [mine, setMine] = useState<MyResponse | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [attentionAnswers, setAttentionAnswers] = useState<Record<string, number>>({});
   const [qpage, setQpage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -118,15 +119,20 @@ export function BfiPage() {
       }
       return;
     }
+    const qualityChecks = instrument?.quality_checks ?? [];
+    const missingCheck = qualityChecks.find((check) => !attentionAnswers[check.check_id]);
+    if (missingCheck) {
+      toast("请先完成页面下方的作答确认题");
+      document
+        .querySelector(`[data-quality-check="${missingCheck.check_id}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     setBusy(true);
     try {
-      const resp = await surveyApi.submitSurvey();
+      const resp = await surveyApi.submitSurvey(attentionAnswers);
       setMine(resp);
-      toast(
-        resp.unlock_games
-          ? "问卷已提交，博弈入口已解锁"
-          : "问卷已提交，但质量检查未通过，博弈入口未解锁",
-      );
+      toast("问卷已提交，博弈入口已解锁");
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "提交失败");
     } finally {
@@ -136,7 +142,7 @@ export function BfiPage() {
 
   if (loading) return <div className="page"><p>加载中…</p></div>;
 
-  if (mine?.status === "submitted" && mine.personality) {
+  if (mine?.status === "submitted" && mine.feedback_unlocked && mine.personality) {
     const p = mine.personality;
     const dims = [
       `开放性 ${Math.round(p.o * 20)}`,
@@ -150,39 +156,10 @@ export function BfiPage() {
         <section className="hero card">
           <div>
             <div className="eyebrow">
-              已完成 · {mine.quality_passed ? "质量检查通过" : "质量检查未通过"}
+              实验已完成 · 人格反馈
             </div>
             <h2>你的人格轮廓已生成</h2>
-            <p>
-              {mine.quality_passed
-                ? `${p.summary_label}。结果用于解释博弈中的决策倾向，不代表能力高低。`
-                : "本次作答未通过质量检查，因此不会解锁博弈实验。你可以重新认真作答一次。"}
-            </p>
-            {!mine.quality_passed ? (
-              <button
-                className="primary"
-                type="button"
-                style={{ marginTop: 16 }}
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const resp = await surveyApi.retakeSurvey();
-                    setMine(resp);
-                    setAnswers({});
-                    setQpage(1);
-                    setIntroDone(true);
-                    toast("已开启重新作答，请认真填写全部题目");
-                  } catch (e) {
-                    toast(e instanceof ApiError ? e.message : "无法重新作答");
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                {busy ? "请稍候…" : "重新作答 →"}
-              </button>
-            ) : null}
+            <p>{p.summary_label}。结果用于解释博弈中的决策倾向，不代表能力高低。</p>
           </div>
           <div className="ring" style={{ ["--p" as string]: "360deg" }}>
             <b>100%</b>
@@ -196,6 +173,32 @@ export function BfiPage() {
               <em>已生成</em>
             </div>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (mine?.status === "submitted") {
+    return (
+      <div className="page">
+        <section className="hero card">
+          <div>
+            <div className="eyebrow">问卷已提交 · 等待实验完成</div>
+            <h2>人格反馈将在博弈结束后展示</h2>
+            <p>
+              你的答案已经安全记录。为避免人格标签影响后续决策，请先完成全部必做博弈场景；完成后回到这里即可查看结果。
+            </p>
+          </div>
+          <div className="ring" style={{ ["--p" as string]: "360deg" }}>
+            <b>✓</b>
+          </div>
+        </section>
+        <div className="quality">
+          <i>→</i>
+          <div>
+            <b>下一步：进入博弈实验</b>
+            <small>质量指标仅用于研究数据筛选，不会在实验过程中提示或改变你的作答。</small>
+          </div>
         </div>
       </div>
     );
@@ -340,6 +343,50 @@ export function BfiPage() {
               </div>
             </div>
           ))}
+          {qpage === 4 && (instrument?.quality_checks.length ?? 0) > 0 ? (
+            <div className="quality-check-block">
+              <div className="quality-check-heading">
+                <b>作答确认</b>
+                <span>以下题目不计入人格得分，请按题目中的要求选择。</span>
+              </div>
+              {instrument?.quality_checks.map((check, index) => (
+                <div
+                  className={`qrow${attentionAnswers[check.check_id] ? " answered" : ""}`}
+                  key={check.check_id}
+                  data-quality-check={check.check_id}
+                >
+                  <div className="qtext">
+                    <b>C{index + 1}</b>
+                    {check.stem}
+                  </div>
+                  <div className="scale">
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <label
+                        key={value}
+                        className={
+                          attentionAnswers[check.check_id] === value ? "picked" : undefined
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name={check.check_id}
+                          checked={attentionAnswers[check.check_id] === value}
+                          onChange={() =>
+                            setAttentionAnswers((previous) => ({
+                              ...previous,
+                              [check.check_id]: value,
+                            }))
+                          }
+                        />
+                        <i />
+                        {value}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="qfoot">
           <button

@@ -1213,7 +1213,30 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
   font-size: 13px;
   line-height: 1.6;
 }
+.quality-check-block {
+  border-top: 1px solid var(--line);
+  background: #fbf8ef;
+}
+.quality-check-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 18px 30px 12px;
+  color: #514b40;
+}
+.quality-check-heading b {
+  font-size: 14px;
+}
+.quality-check-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
 @media (max-width: 560px) {
+  .quality-check-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 16px 18px 10px;
+  }
   .topbar-actions {
     max-width: none;
   }
@@ -1242,5 +1265,4 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
     padding: 16px 16px 12px;
   }
 }
-
 

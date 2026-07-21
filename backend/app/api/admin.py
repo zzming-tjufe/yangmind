@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -1023,7 +1024,18 @@ def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_su
 
 @router.get("/export/surveys.csv")
 def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
-    header = ["user_public_id", "nickname", "email", "response_id", "status", "item_no", "value", "submitted_at"]
+    header = [
+        "user_public_id",
+        "nickname",
+        "email",
+        "response_id",
+        "status",
+        "quality_passed",
+        "quality_flags",
+        "item_no",
+        "value",
+        "submitted_at",
+    ]
     rows: list[list] = [header]
     responses = (
         db.query(SurveyResponse)
@@ -1044,6 +1056,8 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
                     user.email,
                     resp.id,
                     resp.status,
+                    resp.quality_passed if resp.quality_passed is not None else "",
+                    json.dumps(resp.quality_flags, ensure_ascii=False) if resp.quality_flags else "",
                     "",
                     "",
                     resp.submitted_at.isoformat() if resp.submitted_at else "",
@@ -1058,6 +1072,8 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
                     user.email,
                     resp.id,
                     resp.status,
+                    resp.quality_passed if resp.quality_passed is not None else "",
+                    json.dumps(resp.quality_flags, ensure_ascii=False) if resp.quality_flags else "",
                     a.item_no,
                     a.value,
                     resp.submitted_at.isoformat() if resp.submitted_at else "",

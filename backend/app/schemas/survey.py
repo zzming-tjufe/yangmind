@@ -10,6 +10,11 @@ class SurveyItemOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class QualityCheckOut(BaseModel):
+    check_id: str
+    stem: str
+
+
 class SurveyInstrumentOut(BaseModel):
     code: str
     version: str
@@ -17,6 +22,7 @@ class SurveyInstrumentOut(BaseModel):
     item_count: int
     scale_hint: str = "1 = 非常不同意 · 2 = 比较不同意 · 3 = 中立 · 4 = 比较同意 · 5 = 非常同意"
     items: list[SurveyItemOut]
+    quality_checks: list[QualityCheckOut] = Field(default_factory=list)
 
 
 class AnswerItem(BaseModel):
@@ -32,6 +38,22 @@ class SaveAnswersRequest(BaseModel):
         item_numbers = [answer.item_no for answer in self.answers]
         if len(item_numbers) != len(set(item_numbers)):
             raise ValueError("同一次保存请求中不能包含重复题号")
+        return self
+
+
+class AttentionAnswer(BaseModel):
+    check_id: str = Field(min_length=1, max_length=32)
+    value: int = Field(ge=1, le=5)
+
+
+class SubmitSurveyRequest(BaseModel):
+    attention_answers: list[AttentionAnswer] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="after")
+    def reject_duplicate_attention_checks(self):
+        check_ids = [answer.check_id for answer in self.attention_answers]
+        if len(check_ids) != len(set(check_ids)):
+            raise ValueError("作答确认题不能重复")
         return self
 
 
@@ -53,3 +75,4 @@ class MyResponseOut(BaseModel):
     personality: PersonalityScoreOut | None = None
     quality_passed: bool | None = None
     unlock_games: bool = False
+    feedback_unlocked: bool = False

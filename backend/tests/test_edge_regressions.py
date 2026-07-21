@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import _public_id_for_user
 from app.core.database import Base
+from app.data.bfi44_seed import BFI44_ITEMS
 from app.core.security import (
     access_token_matches_password,
     create_access_token,
@@ -19,6 +20,7 @@ from app.models.user import User
 from app.schemas.survey import SaveAnswersRequest
 from app.services.bfi_scoring import check_quality
 from app.services.db_fixes import repair_pvp_timeout_choices
+from app.services.experiment_progress import personality_feedback_unlocked
 from app.services.pvp import _mirror_round_to_sessions
 
 
@@ -59,6 +61,127 @@ class EdgeRegressionTests(unittest.TestCase):
         passed, flags = check_quality({item_no: 3 for item_no in range(1, 45)})
         self.assertFalse(passed)
         self.assertEqual(flags["max_same_streak"], 44)
+
+    def test_quality_check_passes_consistent_attentive_answers(self):
+        answers = {
+            item["item_no"]: 2 if item["reverse_scored"] else 4
+            for item in BFI44_ITEMS
+        }
+        passed, flags = check_quality(
+            answers,
+            duration_seconds=360,
+            attention_answers={"attention_1": 4, "attention_2": 2},
+        )
+        self.assertTrue(passed)
+        self.assertEqual(flags["triggered_categories"], [])
+
+    def test_one_quality_signal_is_review_only(self):
+        answers = {
+            item["item_no"]: 2 if item["reverse_scored"] else 4
+            for item in BFI44_ITEMS
+        }
+        passed, flags = check_quality(
+            answers,
+            duration_seconds=60,
+            attention_answers={"attention_1": 4, "attention_2": 2},
+        )
+        self.assertTrue(passed)
+        self.assertTrue(flags["review_recommended"])
+        self.assertEqual(flags["triggered_categories"], ["very_fast"])
+
+    def test_two_independent_quality_signals_fail(self):
+        answers = {
+            item["item_no"]: 2 if item["reverse_scored"] else 4
+            for item in BFI44_ITEMS
+        }
+        passed, flags = check_quality(
+            answers,
+            duration_seconds=60,
+            attention_answers={"attention_1": 1, "attention_2": 2},
+        )
+        self.assertFalse(passed)
+        self.assertEqual(
+            flags["triggered_categories"],
+            ["very_fast", "attention_check"],
+        )
+
+    def test_personality_feedback_waits_for_all_required_scenes(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            user = User(
+                public_id="U-2001",
+                email="feedback@example.com",
+                password_hash="x",
+                nickname="feedback",
+            )
+            experiment = Experiment(
+                code="stag_hunt",
+                title="test",
+                rounds_per_scene=1,
+            )
+            db.add_all([user, experiment])
+            db.flush()
+            scenes = [
+                ExperimentScene(
+                    experiment_id=experiment.id,
+                    scene_key=f"scene-{index}",
+                    no=f"0{index}",
+                    title=f"scene-{index}",
+                    short_desc="test",
+                    option_a="A",
+                    option_b="B",
+                    option_a_text="A",
+                    option_b_text="B",
+                    required=True,
+                    enabled=True,
+                )
+                for index in (1, 2)
+            ]
+            db.add_all(scenes)
+            db.flush()
+            db.add(
+                GameSession(
+                    user_id=user.id,
+                    experiment_id=experiment.id,
+                    scene_id=scenes[0].id,
+                    status="finished",
+                )
+            )
+            db.commit()
+            self.assertFalse(personality_feedback_unlocked(db, user.id))
+
+            db.add(
+                GameSession(
+                    user_id=user.id,
+                    experiment_id=experiment.id,
+                    scene_id=scenes[1].id,
+                    status="finished",
+                )
+            )
+            db.commit()
+            finished_scene_ids = {
+                scene_id
+                for (scene_id,) in db.query(GameSession.scene_id)
+                .filter(
+                    GameSession.user_id == user.id,
+                    GameSession.status == "finished",
+                )
+                .all()
+            }
+            self.assertEqual(finished_scene_ids, {scenes[0].id, scenes[1].id})
+            required_scene_ids = {
+                scene_id
+                for (scene_id,) in db.query(ExperimentScene.id)
+                .filter(
+                    ExperimentScene.experiment_id == experiment.id,
+                    ExperimentScene.enabled.is_(True),
+                    ExperimentScene.required.is_(True),
+                )
+                .all()
+            }
+            self.assertEqual(required_scene_ids, finished_scene_ids)
+            self.assertTrue(personality_feedback_unlocked(db, user.id))
 
     def test_password_change_invalidates_existing_token(self):
         old_hash = hash_password("old-password")
