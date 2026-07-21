@@ -13,6 +13,11 @@ export function ProfilePage() {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  function switchAccount() {
+    logout();
+    toast("已退出当前账号，请登录其他账号");
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (newPassword.length < 6) {
@@ -51,6 +56,9 @@ export function ProfilePage() {
           <h2>我的账号</h2>
           <p>查看基本信息，并在需要时自行修改登录密码。</p>
         </div>
+        <button className="secondary" type="button" onClick={switchAccount}>
+          切换账号
+        </button>
       </section>
 
       <section className="card" style={{ marginTop: 18, padding: 22 }}>

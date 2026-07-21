@@ -139,11 +139,11 @@ export function AppShell({
             className="mobile-logout"
             type="button"
             onClick={logout}
-            title="退出登录"
-            aria-label="退出登录"
+            title="切换账号"
+            aria-label="切换账号"
           >
             <span>↗</span>
-            退出登录
+            切换账号
           </button>
         </nav>
         {superAdmin && onToggleUserPreview ? (
@@ -167,7 +167,7 @@ export function AppShell({
               {staff ? user?.email : `ID · ${user?.public_id}`}
             </small>
           </div>
-          <button onClick={logout} title="退出">
+          <button onClick={logout} title="切换账号" aria-label="切换账号">
             ↗
           </button>
         </div>
