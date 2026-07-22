@@ -118,7 +118,12 @@ export function AdminExportPage() {
 
       {active ? (
         <ModalOverlay onClose={() => !busy && setActive(null)}>
-          <section className="modal card export-modal" role="dialog" aria-modal="true">
+          <section
+            className="modal card export-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <header className="profile-modal-head">
               <div>
                 <b>导出 · {active.title}</b>
