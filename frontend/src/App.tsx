@@ -11,6 +11,7 @@ import { AdminAccountsPage } from "./pages/AdminAccountsPage";
 import { AdminAuditPage } from "./pages/AdminAuditPage";
 import { AdminContentPage } from "./pages/AdminContentPage";
 import { AdminExperimentsPage } from "./pages/AdminExperimentsPage";
+import { AdminExportPage } from "./pages/AdminExportPage";
 import { AdminPagesPage } from "./pages/AdminPagesPage";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { BfiPage } from "./pages/BfiPage";
@@ -22,6 +23,7 @@ import { RankPage } from "./pages/RankPage";
 const staffViews = new Set<View>([
   "users",
   "experiments",
+  "export",
   "accounts",
   "invites",
   "sub_admins",
@@ -32,6 +34,7 @@ const staffViews = new Set<View>([
 
 const superOnlyViews = new Set<View>([
   "experiments",
+  "export",
   "pages",
   "content",
   "sub_admins",
@@ -149,6 +152,9 @@ export default function App() {
       break;
     case "experiments":
       content = superAdmin && !demoMode ? <AdminExperimentsPage /> : <BfiPage />;
+      break;
+    case "export":
+      content = superAdmin && !demoMode ? <AdminExportPage /> : <BfiPage />;
       break;
     case "accounts":
     case "invites":

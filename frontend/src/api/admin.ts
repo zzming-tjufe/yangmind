@@ -389,11 +389,18 @@ export function getAccountEvents() {
   return api<AccountEvent[]>("/api/v1/admin/account-events");
 }
 
-export async function downloadAdminCsv(
-  kind: "users" | "surveys" | "rounds",
+export type ExportKind = "users" | "survey-answers" | "survey-quality" | "runs";
+export type ExportFormat = "csv" | "json";
+
+export async function downloadAdminExport(
+  kind: ExportKind,
+  format: ExportFormat = "csv",
+  filename?: string,
 ): Promise<void> {
   const token = localStorage.getItem("ym_token");
-  const res = await fetch(`${API_BASE}/api/v1/admin/export/${kind}.csv`, {
+  const params = new URLSearchParams({ format });
+  if (filename?.trim()) params.set("filename", filename.trim());
+  const res = await fetch(`${API_BASE}/api/v1/admin/export/${kind}?${params}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) {
@@ -412,10 +419,22 @@ export async function downloadAdminCsv(
   const disposition = res.headers.get("Content-Disposition") || "";
   const match = disposition.match(/filename=\"?([^\";]+)\"?/);
   a.href = url;
-  a.download = match?.[1] || `yangmind_${kind}.csv`;
+  a.download = match?.[1] || `${filename || kind}.${format}`;
   a.style.display = "none";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/** @deprecated 请改用 downloadAdminExport */
+export async function downloadAdminCsv(
+  kind: "users" | "surveys" | "rounds",
+): Promise<void> {
+  const map: Record<string, ExportKind> = {
+    users: "users",
+    surveys: "survey-answers",
+    rounds: "runs",
+  };
+  await downloadAdminExport(map[kind], "csv");
 }

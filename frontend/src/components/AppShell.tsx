@@ -4,6 +4,7 @@ import {
   ArrowLeftRight,
   ArrowUpRight,
   ClipboardList,
+  Download,
   FileText,
   FlaskConical,
   KeyRound,
@@ -29,6 +30,7 @@ type View =
   | "profile"
   | "users"
   | "experiments"
+  | "export"
   | "accounts"
   | "invites"
   | "sub_admins"
@@ -52,6 +54,7 @@ const superAdminNavGroups: NavGroup[] = [
     items: [
       { id: "users", icon: Users, label: "参与者数据" },
       { id: "experiments", icon: FlaskConical, label: "博弈实验" },
+      { id: "export", icon: Download, label: "导出" },
     ],
   },
   {
@@ -100,6 +103,7 @@ const fallbackTitles: Record<View, [string, string]> = {
   profile: ["我的账号", "查看资料并自行修改登录密码"],
   users: ["参与者数据", "查看和管理注册过来的同学"],
   experiments: ["博弈实验", "开关实验、调整场景"],
+  export: ["数据导出", "按层级下载用户、问卷与博弈分析文件"],
   accounts: ["邀请码", "创建邀请码，分给子管去拉人"],
   invites: ["邀请码", "创建邀请码，分给子管去拉人"],
   sub_admins: ["子管理员", "查看子管，启用或禁用"],

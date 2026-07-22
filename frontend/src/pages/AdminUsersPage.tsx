@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import {
   allowSurveyRetake,
-  downloadAdminCsv,
   getAdminPersonality,
   getAdminStats,
   getAdminUsers,
@@ -157,15 +156,6 @@ export function AdminUsersPage() {
     }
   }
 
-  async function onExport(kind: "users" | "surveys" | "rounds") {
-    try {
-      await downloadAdminCsv(kind);
-      toast("导出已开始下载");
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "导出失败");
-    }
-  }
-
   return (
     <div className="page">
       {!ready ? (
@@ -192,26 +182,6 @@ export function AdminUsersPage() {
           这里只能看到用你转发的邀请码注册的参与者。
         </p>
       )}
-
-      {superAdmin ? (
-        <div className="export-bar card">
-          <div>
-            <b>研究数据导出</b>
-            <small>下载 CSV，可用 Excel 打开</small>
-          </div>
-          <div className="export-actions">
-            <button className="secondary" type="button" onClick={() => onExport("users")}>
-              导出参与者
-            </button>
-            <button className="secondary" type="button" onClick={() => onExport("surveys")}>
-              导出问卷
-            </button>
-            <button className="secondary" type="button" onClick={() => onExport("rounds")}>
-              导出对局轮次
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <section className="table card user-table">
         <div className="tablehead">
