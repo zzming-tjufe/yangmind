@@ -15,6 +15,8 @@ import {
   type AnnouncementKind,
   type AnnouncementStatus,
 } from "../api/admin";
+import { AdminListStatus } from "../components/AdminListStatus";
+import { ModalOverlay } from "../components/ModalPortal";
 import { useToast } from "../context/ToastContext";
 
 type Tab = "announcements" | "blocks" | "scenes";
@@ -62,20 +64,29 @@ export function AdminContentPage() {
     option_b_text: "",
   });
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const [b, exps, anns] = await Promise.all([
-      getAdminContentBlocks(),
-      getAdminExperiments(),
-      getAdminAnnouncements(),
-    ]);
-    setBlocks(b);
-    setScenes(exps.flatMap((e) => e.scenes));
-    setAnnouncements(anns);
+    setLoading(true);
+    try {
+      const [b, exps, anns] = await Promise.all([
+        getAdminContentBlocks(),
+        getAdminExperiments(),
+        getAdminAnnouncements(),
+      ]);
+      setBlocks(b);
+      setScenes(exps.flatMap((e) => e.scenes));
+      setAnnouncements(anns);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((e) => toast(e instanceof ApiError ? e.message : "加载失败"));
+    load().catch((e) => {
+      setLoading(false);
+      toast(e instanceof ApiError ? e.message : "加载失败");
+    });
   }, [toast]);
 
   const sortedBlocks = useMemo(
@@ -248,37 +259,43 @@ export function AdminContentPage() {
             </button>
           </div>
           <div className="manage-list">
-            {announcements.map((a) => (
-              <div className="manage-item" key={a.id}>
-                <i>{a.kind === "changelog" ? "↺" : "!"}</i>
-                <div>
-                  <b>
-                    {a.pinned ? "[置顶] " : ""}
-                    {a.title}
-                  </b>
-                  <small>
-                    {KIND_LABEL[a.kind] || a.kind} ·{" "}
-                    {a.status === "published" ? "已发布" : "草稿"}
-                    {a.published_at
-                      ? ` · ${new Date(a.published_at).toLocaleString("zh-CN")}`
-                      : ""}
-                  </small>
-                </div>
-                <span className={`badge ${a.status === "published" ? "" : "warn"}`}>
-                  {a.status === "published" ? "已发布" : "草稿"}
-                </span>
-                <div className="actions">
-                  <button type="button" onClick={() => openEditAnn(a)}>
-                    编辑
-                  </button>
-                  <button type="button" disabled={busy} onClick={() => removeAnn(a)}>
-                    删除
-                  </button>
-                </div>
-              </div>
-            ))}
-            {announcements.length === 0 && (
-              <div className="manage-item">暂无公告，点击右上角新建</div>
+            {loading ? (
+              <AdminListStatus loading />
+            ) : (
+              <>
+                {announcements.map((a) => (
+                  <div className="manage-item" key={a.id}>
+                    <i>{a.kind === "changelog" ? "↺" : "!"}</i>
+                    <div>
+                      <b>
+                        {a.pinned ? "[置顶] " : ""}
+                        {a.title}
+                      </b>
+                      <small>
+                        {KIND_LABEL[a.kind] || a.kind} ·{" "}
+                        {a.status === "published" ? "已发布" : "草稿"}
+                        {a.published_at
+                          ? ` · ${new Date(a.published_at).toLocaleString("zh-CN")}`
+                          : ""}
+                      </small>
+                    </div>
+                    <span className={`badge ${a.status === "published" ? "" : "warn"}`}>
+                      {a.status === "published" ? "已发布" : "草稿"}
+                    </span>
+                    <div className="actions">
+                      <button type="button" onClick={() => openEditAnn(a)}>
+                        编辑
+                      </button>
+                      <button type="button" disabled={busy} onClick={() => removeAnn(a)}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {announcements.length === 0 && (
+                  <AdminListStatus empty emptyText="暂无公告，点击右上角新建" />
+                )}
+              </>
             )}
           </div>
         </section>
@@ -293,23 +310,29 @@ export function AdminContentPage() {
             </span>
           </div>
           <div className="manage-list">
-            {sortedBlocks.map((b) => (
-              <div className="manage-item" key={b.id}>
-                <i>✦</i>
-                <div>
-                  <b>{BLOCK_LABELS[b.block_key] || b.block_key}</b>
-                  <small>
-                    {b.block_key} · v{b.version} · {b.title || "无标题"}
-                  </small>
+            {loading ? (
+              <AdminListStatus loading />
+            ) : sortedBlocks.length === 0 ? (
+              <AdminListStatus empty emptyText="暂无内容块" />
+            ) : (
+              sortedBlocks.map((b) => (
+                <div className="manage-item" key={b.id}>
+                  <i>✦</i>
+                  <div>
+                    <b>{BLOCK_LABELS[b.block_key] || b.block_key}</b>
+                    <small>
+                      {b.block_key} · v{b.version} · {b.title || "无标题"}
+                    </small>
+                  </div>
+                  <span className="badge">{b.body.trim() ? "有内容" : "空"}</span>
+                  <div className="actions">
+                    <button type="button" onClick={() => openBlock(b)}>
+                      编辑
+                    </button>
+                  </div>
                 </div>
-                <span className="badge">{b.body.trim() ? "有内容" : "空"}</span>
-                <div className="actions">
-                  <button type="button" onClick={() => openBlock(b)}>
-                    编辑
-                  </button>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </section>
       )}
@@ -320,33 +343,38 @@ export function AdminContentPage() {
             <h3>实验场景</h3>
           </div>
           <div className="manage-list">
-            {scenes.map((s) => (
-              <div className="manage-item" key={s.id}>
-                <i>{s.no}</i>
-                <div>
-                  <b>{s.title}</b>
-                  <small>
-                    {s.scene_key} · {s.short_desc.slice(0, 48)}
-                    {s.short_desc.length > 48 ? "…" : ""}
-                  </small>
+            {loading ? (
+              <AdminListStatus loading />
+            ) : scenes.length === 0 ? (
+              <AdminListStatus empty emptyText="暂无场景" />
+            ) : (
+              scenes.map((s) => (
+                <div className="manage-item" key={s.id}>
+                  <i>{s.no}</i>
+                  <div>
+                    <b>{s.title}</b>
+                    <small>
+                      {s.scene_key} · {s.short_desc.slice(0, 48)}
+                      {s.short_desc.length > 48 ? "…" : ""}
+                    </small>
+                  </div>
+                  <span className={`badge ${s.enabled ? "" : "warn"}`}>
+                    {s.enabled ? "启用" : "停用"}
+                  </span>
+                  <div className="actions">
+                    <button type="button" onClick={() => openScene(s)}>
+                      编辑文案
+                    </button>
+                  </div>
                 </div>
-                <span className={`badge ${s.enabled ? "" : "warn"}`}>
-                  {s.enabled ? "启用" : "停用"}
-                </span>
-                <div className="actions">
-                  <button type="button" onClick={() => openScene(s)}>
-                    编辑文案
-                  </button>
-                </div>
-              </div>
-            ))}
-            {scenes.length === 0 && <div className="manage-item">暂无场景</div>}
+              ))
+            )}
           </div>
         </section>
       )}
 
       {annModalOpen && (
-        <div className="profile-overlay" onClick={closeAnnModal}>
+        <ModalOverlay onClose={closeAnnModal}>
           <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
             <div className="profile-modal-head">
               <div className="profile-person">
@@ -426,11 +454,11 @@ export function AdminContentPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {editBlock && (
-        <div className="profile-overlay" onClick={() => setEditBlock(null)}>
+        <ModalOverlay onClose={() => setEditBlock(null)}>
           <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
             <div className="profile-modal-head">
               <div className="profile-person">
@@ -468,11 +496,11 @@ export function AdminContentPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {editScene && (
-        <div className="profile-overlay" onClick={() => setEditScene(null)}>
+        <ModalOverlay onClose={() => setEditScene(null)}>
           <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
             <div className="profile-modal-head">
               <div className="profile-person">
@@ -544,7 +572,7 @@ export function AdminContentPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

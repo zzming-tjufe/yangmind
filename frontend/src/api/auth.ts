@@ -7,6 +7,8 @@ export type User = {
   nickname: string;
   role: string;
   status: string;
+  is_debug?: boolean;
+  is_sudo?: boolean;
 };
 
 export type TokenResponse = {

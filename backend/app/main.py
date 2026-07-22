@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
+from app.api.demo import router as demo_router
 from app.api.games import router as games_router
 from app.api.leaderboard import router as leaderboard_router
 from app.api.survey import router as survey_router
@@ -43,12 +44,14 @@ def on_startup():
     try:
         from app.services.db_fixes import (
             cleanup_duplicate_survey_responses,
+            ensure_nickname_unique_index,
             ensure_rbac_schema,
             ensure_survey_response_unique_index,
             repair_pvp_timeout_choices,
         )
 
         ensure_rbac_schema(engine)
+        ensure_nickname_unique_index(engine)
         cleanup_duplicate_survey_responses(db)
         ensure_survey_response_unique_index(engine)
         repair_pvp_timeout_choices(db)
@@ -64,6 +67,7 @@ app.include_router(pvp_router)
 app.include_router(leaderboard_router)
 app.include_router(site_router)
 app.include_router(admin_router)
+app.include_router(demo_router)
 
 
 @app.get("/health")

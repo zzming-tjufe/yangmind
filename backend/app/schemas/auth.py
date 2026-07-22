@@ -9,7 +9,7 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    # 支持邮箱，或管理员别名 admin
+    # 支持邮箱、昵称，或管理员别名 admin
     email: str = Field(min_length=1, max_length=254)
     password: str
 
@@ -21,6 +21,8 @@ class UserOut(BaseModel):
     nickname: str
     role: str
     status: str
+    is_debug: bool = False
+    is_sudo: bool = False
 
     model_config = {"from_attributes": True}
 

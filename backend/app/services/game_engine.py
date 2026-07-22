@@ -26,3 +26,11 @@ def bot_choice(bot_seed: int, round_no: int, coop_rate: float = BOT_COOP_RATE) -
     """可复现的机器人选择：约 coop_rate 概率选 A。"""
     rng = random.Random(bot_seed + round_no * 10007)
     return "A" if rng.random() < coop_rate else "B"
+
+
+def demo_bot_choice(rng: random.Random, bias_rate: float = 0.6) -> str:
+    """演示用人机：每轮随机偏向一侧（bias_rate），长期 A/B 仍约各 50%。"""
+    preferred = "A" if rng.random() < 0.5 else "B"
+    if rng.random() < bias_rate:
+        return preferred
+    return "B" if preferred == "A" else "A"

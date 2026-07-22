@@ -83,15 +83,18 @@ def survey_quality_passed_for_user(db: Session, user_id: int) -> bool | None:
 
 
 def _leaderboard_eligible_users(db: Session) -> list[User]:
-    """排行榜仅统计普通参与者：排除总管 / 子管 / 旧 admin，以及系统总管邮箱。"""
+    """排行榜仅统计普通参与者：排除管理侧、调试账号、系统总管邮箱。"""
     seed_email = settings.seed_admin_email.lower().strip()
+    sudo_email = settings.sudo_email.lower().strip()
     return (
         db.query(User)
         .filter(
             User.status == "active",
             User.role == ROLE_PARTICIPANT,
+            User.is_debug.is_(False),
             User.role.notin_(tuple(STAFF_ROLES)),
             func.lower(User.email) != seed_email,
+            func.lower(User.email) != sudo_email,
         )
         .all()
     )
@@ -104,6 +107,8 @@ def build_leaderboard_rows(db: Session, period: str = "all") -> list[dict]:
     for u in users:
         # 双保险：角色若被误标成管理侧，绝不进榜
         if u.role != ROLE_PARTICIPANT or u.role in STAFF_ROLES:
+            continue
+        if getattr(u, "is_debug", False):
             continue
         total, sessions = user_game_stats(db, u.id, since=since)
         if period == "weekly" and sessions == 0:
@@ -127,10 +132,20 @@ def build_leaderboard_rows(db: Session, period: str = "all") -> list[dict]:
 
 
 def admin_overview_stats(db: Session) -> dict:
-    total_users = db.query(func.count(User.id)).filter(User.role == "participant").scalar() or 0
+    total_users = (
+        db.query(func.count(User.id))
+        .filter(User.role == "participant", User.is_debug.is_(False))
+        .scalar()
+        or 0
+    )
     submitted = (
         db.query(func.count(func.distinct(SurveyResponse.user_id)))
-        .filter(SurveyResponse.status == "submitted")
+        .join(User, User.id == SurveyResponse.user_id)
+        .filter(
+            SurveyResponse.status == "submitted",
+            User.role == "participant",
+            User.is_debug.is_(False),
+        )
         .scalar()
         or 0
     )
@@ -139,14 +154,24 @@ def admin_overview_stats(db: Session) -> dict:
     valid_rounds = (
         db.query(func.count(GameRound.id))
         .join(GameSession, GameRound.session_id == GameSession.id)
-        .filter(GameSession.status == "finished", GameRound.my_choice.in_(("A", "B")))
+        .join(User, User.id == GameSession.user_id)
+        .filter(
+            GameSession.status == "finished",
+            GameRound.my_choice.in_(("A", "B")),
+            User.is_debug.is_(False),
+        )
         .scalar()
         or 0
     )
     coop_rounds = (
         db.query(func.count(GameRound.id))
         .join(GameSession, GameRound.session_id == GameSession.id)
-        .filter(GameSession.status == "finished", GameRound.my_choice == "A")
+        .join(User, User.id == GameSession.user_id)
+        .filter(
+            GameSession.status == "finished",
+            GameRound.my_choice == "A",
+            User.is_debug.is_(False),
+        )
         .scalar()
         or 0
     )

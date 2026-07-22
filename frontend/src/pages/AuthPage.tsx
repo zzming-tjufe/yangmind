@@ -34,11 +34,10 @@ export function AuthPage() {
   async function submit(nextMode: "login" | "register") {
     const account = email.trim();
     if (!account) {
-      toast(nextMode === "login" ? "请输入账号或邮箱" : "请输入邮箱");
+      toast(nextMode === "login" ? "请输入昵称或邮箱" : "请输入邮箱");
       return;
     }
-    const isAdminAlias = nextMode === "login" && account.toLowerCase() === "admin";
-    if (!isAdminAlias && !EMAIL_PATTERN.test(account)) {
+    if (nextMode === "register" && !EMAIL_PATTERN.test(account)) {
       toast("邮箱格式不正确，请输入类似 name@example.com 的地址");
       return;
     }
@@ -135,10 +134,10 @@ export function AuthPage() {
                 </button>
               </div>
               <label className="field">
-                账号 / 邮箱
+                昵称 / 邮箱
                 <input
                   type="text"
-                  placeholder="请输入注册邮箱"
+                  placeholder="昵称或注册邮箱"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"
@@ -199,7 +198,7 @@ export function AuthPage() {
               <label className="field">
                 昵称
                 <input
-                  placeholder="你希望如何被称呼"
+                  placeholder="唯一昵称，可用于登录"
                   value={nickname}
                   onChange={(e) => setNickname(e.target.value)}
                   autoComplete="nickname"

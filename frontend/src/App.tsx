@@ -1,9 +1,14 @@
 import { useLayoutEffect, useState } from "react";
+import { ApiError } from "./api/client";
 import { AppShell, type View } from "./components/AppShell";
 import { useAuth } from "./context/AuthContext";
+import { useDemo } from "./context/DemoContext";
+import { useSudoView } from "./context/SudoViewContext";
+import { useToast } from "./context/ToastContext";
 import { isStaff, isSuperAdmin } from "./lib/roles";
 import { AuthPage } from "./pages/AuthPage";
 import { AdminAccountsPage } from "./pages/AdminAccountsPage";
+import { AdminAuditPage } from "./pages/AdminAuditPage";
 import { AdminContentPage } from "./pages/AdminContentPage";
 import { AdminExperimentsPage } from "./pages/AdminExperimentsPage";
 import { AdminPagesPage } from "./pages/AdminPagesPage";
@@ -18,38 +23,85 @@ const staffViews = new Set<View>([
   "users",
   "experiments",
   "accounts",
+  "invites",
+  "sub_admins",
+  "audit",
   "pages",
   "content",
 ]);
 
-const superOnlyViews = new Set<View>(["experiments", "pages", "content"]);
+const superOnlyViews = new Set<View>([
+  "experiments",
+  "pages",
+  "content",
+  "sub_admins",
+  "audit",
+]);
 
 function homeViewFor(role: string | undefined): View {
   return isStaff(role) ? "users" : "bfi";
 }
 
+function normalizeView(view: View): View {
+  return view === "accounts" ? "invites" : view;
+}
+
 export default function App() {
   const { user, loading } = useAuth();
+  const { demoMode, enterDemo, exitDemo, resetDemo } = useDemo();
+  const { isSudoUser, viewAs, setViewAs, effectiveRole } = useSudoView();
+  const { toast } = useToast();
   const [view, setView] = useState<View>("bfi");
-  const [previewingUserUi, setPreviewingUserUi] = useState(false);
+  const [demoEpoch, setDemoEpoch] = useState(0);
 
-  // 必须在绘制前切回角色对应首页，否则会短暂渲染上一账号的管理页并弹出「需要管理员权限」
   useLayoutEffect(() => {
     if (!user) {
-      setPreviewingUserUi(false);
+      exitDemo();
       setView("bfi");
       return;
     }
-    setPreviewingUserUi(false);
-    setView(homeViewFor(user.role));
-  }, [user]);
+    exitDemo();
+    setView(homeViewFor(isSudoUser ? viewAs : user.role));
+  }, [user, exitDemo, isSudoUser, viewAs]);
 
-  function toggleUserPreview() {
-    if (!isSuperAdmin(user?.role)) return;
-    setPreviewingUserUi((current) => {
-      setView(current ? "users" : "bfi");
-      return !current;
-    });
+  async function toggleDemo() {
+    if (!isStaff(effectiveRole)) return;
+    if (demoMode) {
+      exitDemo();
+      setView("users");
+      return;
+    }
+    try {
+      await enterDemo();
+      setView("bfi");
+      toast("已进入演示模式：操作完整可交互，数据不写入正式库");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "进入演示模式失败");
+    }
+  }
+
+  async function onResetDemo() {
+    try {
+      await resetDemo();
+      setDemoEpoch((n) => n + 1);
+      toast("演示数据已重置");
+      setView("bfi");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "重置失败");
+    }
+  }
+
+  function onSudoViewChange(next: typeof viewAs) {
+    setViewAs(next);
+    exitDemo();
+    setView(homeViewFor(next));
+    toast(
+      next === "super_admin"
+        ? "已切换到总管界面"
+        : next === "sub_admin"
+          ? "已切换到子管界面"
+          : "已切换到参与者界面",
+    );
   }
 
   if (loading) {
@@ -62,12 +114,11 @@ export default function App() {
 
   if (!user) return <AuthPage />;
 
-  const staff = isStaff(user.role);
-  const superAdmin = isSuperAdmin(user.role);
-  const showParticipantUi = !staff || previewingUserUi;
+  const staff = isStaff(effectiveRole);
+  const superAdmin = isSuperAdmin(effectiveRole);
+  const showParticipantUi = !staff || demoMode;
 
-  // 按角色校正当前 view，避免错误页面发起管理端请求
-  let safeView = view;
+  let safeView = normalizeView(view);
   if (showParticipantUi) {
     if (staffViews.has(safeView)) safeView = "bfi";
   } else if (!staff) {
@@ -94,19 +145,32 @@ export default function App() {
       content = <ProfilePage />;
       break;
     case "users":
-      content = staff && !previewingUserUi ? <AdminUsersPage /> : <BfiPage />;
+      content = staff && !demoMode ? <AdminUsersPage /> : <BfiPage />;
       break;
     case "experiments":
-      content = superAdmin && !previewingUserUi ? <AdminExperimentsPage /> : <BfiPage />;
+      content = superAdmin && !demoMode ? <AdminExperimentsPage /> : <BfiPage />;
       break;
     case "accounts":
-      content = staff && !previewingUserUi ? <AdminAccountsPage /> : <BfiPage />;
+    case "invites":
+      content =
+        staff && !demoMode ? <AdminAccountsPage section="invites" /> : <BfiPage />;
+      break;
+    case "sub_admins":
+      content =
+        superAdmin && !demoMode ? (
+          <AdminAccountsPage section="sub_admins" />
+        ) : (
+          <BfiPage />
+        );
+      break;
+    case "audit":
+      content = superAdmin && !demoMode ? <AdminAuditPage /> : <BfiPage />;
       break;
     case "pages":
-      content = superAdmin && !previewingUserUi ? <AdminPagesPage /> : <BfiPage />;
+      content = superAdmin && !demoMode ? <AdminPagesPage /> : <BfiPage />;
       break;
     case "content":
-      content = superAdmin && !previewingUserUi ? <AdminContentPage /> : <BfiPage />;
+      content = superAdmin && !demoMode ? <AdminContentPage /> : <BfiPage />;
       break;
   }
 
@@ -114,12 +178,16 @@ export default function App() {
     <AppShell
       view={safeView}
       onNavigate={setView}
-      previewingUserUi={previewingUserUi}
-      onToggleUserPreview={toggleUserPreview}
+      demoMode={demoMode}
+      onToggleDemo={staff && !isSudoUser ? toggleDemo : undefined}
+      onResetDemo={demoMode ? onResetDemo : undefined}
+      sudoViewAs={isSudoUser ? viewAs : undefined}
+      onSudoViewChange={isSudoUser ? onSudoViewChange : undefined}
+      effectiveRole={effectiveRole}
     >
       <div
-        key={safeView}
-        className={`page-soft-in${previewingUserUi ? " user-preview-content" : ""}`}
+        key={`${safeView}-${demoMode ? "demo" : "live"}-${viewAs}-${demoEpoch}`}
+        className="page-soft-in"
       >
         {content}
       </div>

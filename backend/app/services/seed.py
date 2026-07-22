@@ -1,3 +1,4 @@
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.data.bfi44_seed import (
@@ -104,10 +105,11 @@ def seed_cms_if_needed(db: Session) -> None:
 
 
 def seed_admin_if_needed(db: Session) -> None:
-    """确保唯一总管账号；旧 role=admin 迁移为 super_admin；保留已有 sub_admin。"""
-    from app.core.roles import ROLE_ADMIN_LEGACY, ROLE_SUPER
+    """确保唯一总管账号；旧 role=admin 迁移为 super_admin；保留已有 sub_admin / sudo。"""
+    from app.core.roles import ROLE_ADMIN_LEGACY, ROLE_SUDO, ROLE_SUPER
 
     email = settings.seed_admin_email.lower().strip()
+    sudo_email = settings.sudo_email.lower().strip()
     admin = db.query(User).filter(User.email == email).first()
     if admin is None:
         count = db.query(User).count()
@@ -118,6 +120,7 @@ def seed_admin_if_needed(db: Session) -> None:
             nickname=settings.seed_admin_nickname,
             role=ROLE_SUPER,
             status="active",
+            is_debug=False,
         )
         db.add(admin)
     else:
@@ -127,16 +130,73 @@ def seed_admin_if_needed(db: Session) -> None:
         admin.password_hash = hash_password(settings.seed_admin_password)
 
     # 其它遗留 admin 升为总管角色名统一，避免出现第二个总管：降为 participant
+    # 不碰 sudo 调试号
     others = (
         db.query(User)
-        .filter(User.role.in_([ROLE_ADMIN_LEGACY, ROLE_SUPER]), User.email != email)
+        .filter(
+            User.role.in_([ROLE_ADMIN_LEGACY, ROLE_SUPER]),
+            User.email != email,
+            User.email != sudo_email,
+            User.role != ROLE_SUDO,
+        )
         .all()
     )
     for u in others:
-        # 明确是子管的不碰；仅清理误标的总管/旧 admin
         if u.role == ROLE_ADMIN_LEGACY or u.role == ROLE_SUPER:
             u.role = "participant"
 
+    db.commit()
+
+
+def seed_sudo_if_needed(db: Session) -> None:
+    """按环境变量创建/同步调试账号 sudo（昵称默认 sudo，role=sudo，is_debug=true）。"""
+    from app.core.roles import ROLE_SUDO
+
+    if not settings.enable_sudo:
+        return
+
+    password = settings.sudo_password.strip()
+    if not password:
+        if settings.is_production:
+            print("[yangmind] ENABLE_SUDO=true 但未设置 SUDO_PASSWORD，跳过创建 sudo")
+            return
+        password = "sudo4689"
+        print("[yangmind] 警告: 未设置 SUDO_PASSWORD，开发环境使用默认 sudo4689")
+
+    email = settings.sudo_email.lower().strip()
+    nickname = (settings.sudo_nickname or "sudo").strip() or "sudo"
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        by_nick = (
+            db.query(User)
+            .filter(func.lower(User.nickname) == nickname.lower())
+            .first()
+        )
+        if by_nick is not None and by_nick.email != email:
+            print(
+                f"[yangmind] 警告: 昵称 {nickname} 已被占用（{by_nick.email}），"
+                "无法创建 sudo 账号"
+            )
+            return
+        count = db.query(User).count()
+        user = User(
+            public_id=f"U-{1001 + count}",
+            email=email,
+            password_hash=hash_password(password),
+            nickname=nickname,
+            role=ROLE_SUDO,
+            status="active",
+            is_debug=True,
+        )
+        db.add(user)
+        print(f"[yangmind] 已创建调试账号 {nickname}（role=sudo）")
+    else:
+        user.role = ROLE_SUDO
+        user.status = "active"
+        user.is_debug = True
+        user.nickname = nickname
+        user.password_hash = hash_password(password)
+        print(f"[yangmind] 已同步调试账号 {nickname}")
     db.commit()
 
 
@@ -145,3 +205,4 @@ def seed_all(db: Session) -> None:
     seed_stag_hunt_if_needed(db)
     seed_cms_if_needed(db)
     seed_admin_if_needed(db)
+    seed_sudo_if_needed(db)

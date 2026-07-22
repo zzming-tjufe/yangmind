@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_admin, get_current_super_admin
@@ -16,6 +16,7 @@ from app.core.roles import (
     INVITE_KIND_SUB,
     INVITE_KINDS,
     ROLE_SUB,
+    is_sudo,
     is_super_admin,
 )
 from app.core.security import hash_password
@@ -118,24 +119,111 @@ def list_users(
         like = f"%{q.strip()}%"
         query = query.filter((User.nickname.like(like)) | (User.public_id.like(like)) | (User.email.like(like)))
     users = query.order_by(User.id.desc()).all()
-    items = []
-    for u in users:
-        total, sessions = user_game_stats(db, u.id)
-        personality = latest_personality(db, u.id)
-        can_retake, retake_count, retake_block_reason = _survey_retake_state(db, u.id)
-        submitted_response = (
-            db.query(SurveyResponse)
-            .filter(SurveyResponse.user_id == u.id, SurveyResponse.status == "submitted")
-            .order_by(SurveyResponse.id.desc())
-            .first()
+    return AdminUsersOut(total=len(users), items=_build_admin_user_rows(db, users))
+
+
+def _build_admin_user_rows(db: Session, users: list[User]) -> list[AdminUserRow]:
+    """批量组装用户列表，避免逐用户 N+1 查询。"""
+    if not users:
+        return []
+
+    user_ids = [u.id for u in users]
+
+    game_rows = (
+        db.query(
+            GameSession.user_id,
+            func.coalesce(func.sum(GameSession.my_score), 0),
+            func.count(GameSession.id),
         )
-        quality_telemetry = (
+        .filter(GameSession.user_id.in_(user_ids), GameSession.status == "finished")
+        .group_by(GameSession.user_id)
+        .all()
+    )
+    game_map = {uid: (int(total or 0), int(cnt or 0)) for uid, total, cnt in game_rows}
+
+    personality_map: dict[int, PersonalityScore] = {}
+    for row in (
+        db.query(PersonalityScore)
+        .filter(PersonalityScore.user_id.in_(user_ids))
+        .order_by(PersonalityScore.id.desc())
+        .all()
+    ):
+        if row.user_id not in personality_map:
+            personality_map[row.user_id] = row
+
+    responses = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.user_id.in_(user_ids))
+        .order_by(SurveyResponse.id.desc())
+        .all()
+    )
+    latest_submitted: dict[int, SurveyResponse] = {}
+    in_progress_users: set[int] = set()
+    for resp in responses:
+        if resp.status == "submitted" and resp.user_id not in latest_submitted:
+            latest_submitted[resp.user_id] = resp
+        elif resp.status == "in_progress":
+            in_progress_users.add(resp.user_id)
+
+    submitted_ids = [r.id for r in latest_submitted.values()]
+    telemetry_map: dict[int, SurveyQualityTelemetry] = {}
+    if submitted_ids:
+        for tele in (
             db.query(SurveyQualityTelemetry)
-            .filter(SurveyQualityTelemetry.response_id == submitted_response.id)
-            .first()
-            if submitted_response
-            else None
+            .filter(SurveyQualityTelemetry.response_id.in_(submitted_ids))
+            .all()
+        ):
+            telemetry_map[tele.response_id] = tele
+
+    retake_map = {
+        uid: int(cnt)
+        for uid, cnt in (
+            db.query(SurveyRetakeArchive.user_id, func.count(SurveyRetakeArchive.id))
+            .filter(SurveyRetakeArchive.user_id.in_(user_ids))
+            .group_by(SurveyRetakeArchive.user_id)
+            .all()
         )
+    }
+
+    session_users = {
+        uid
+        for (uid,) in db.query(GameSession.user_id)
+        .filter(GameSession.user_id.in_(user_ids))
+        .distinct()
+        .all()
+    }
+    pvp_users = {
+        uid
+        for (uid,) in db.query(PvpMatch.user_a_id).filter(PvpMatch.user_a_id.in_(user_ids)).distinct().all()
+    } | {
+        uid
+        for (uid,) in db.query(PvpMatch.user_b_id).filter(PvpMatch.user_b_id.in_(user_ids)).distinct().all()
+    }
+
+    items: list[AdminUserRow] = []
+    for u in users:
+        total, sessions = game_map.get(u.id, (0, 0))
+        personality = personality_map.get(u.id)
+        submitted = latest_submitted.get(u.id)
+        if submitted is None:
+            survey_status = "作答中" if u.id in in_progress_users else "未完成"
+            quality_passed = None
+        elif submitted.quality_passed is False:
+            survey_status = "质量未过"
+            quality_passed = False
+        else:
+            survey_status = "已完成"
+            quality_passed = submitted.quality_passed
+
+        retake_count = retake_map.get(u.id, 0)
+        if submitted is None:
+            can_retake, retake_block_reason = False, "用户尚未正式提交问卷"
+        elif u.id in session_users or u.id in pvp_users:
+            can_retake, retake_block_reason = False, "用户已进入博弈，为避免污染前测数据不能重做"
+        else:
+            can_retake, retake_block_reason = True, None
+
+        quality_telemetry = telemetry_map.get(submitted.id) if submitted else None
         items.append(
             AdminUserRow(
                 id=u.id,
@@ -146,20 +234,21 @@ def list_users(
                 total_score=total,
                 sessions_count=sessions,
                 personality_summary=personality.summary_label if personality else "待生成",
-                survey_status=survey_status_for_user(db, u.id),
-                quality_passed=survey_quality_passed_for_user(db, u.id),
+                survey_status=survey_status,
+                quality_passed=quality_passed,
                 has_personality=personality is not None,
                 status=u.status,
                 can_retake_survey=can_retake,
                 retake_count=retake_count,
                 retake_block_reason=retake_block_reason,
-                has_submitted_survey=submitted_response is not None,
+                has_submitted_survey=submitted is not None,
                 quality_review_status=(quality_telemetry.admin_review_status if quality_telemetry else None),
                 quality_soft_flags=list(quality_telemetry.soft_flags or []) if quality_telemetry else [],
                 quality_hard_exclusion=bool(quality_telemetry and quality_telemetry.hard_exclusion),
+                is_debug=bool(getattr(u, "is_debug", False)),
             )
         )
-    return AdminUsersOut(total=len(items), items=items)
+    return items
 
 
 class UserStatusBody(BaseModel):
@@ -934,6 +1023,7 @@ class InviteOut(BaseModel):
     note: str
     owner_id: int | None = None
     owner_nickname: str | None = None
+    is_debug: bool = False
     created_at: datetime | None = None
 
 
@@ -958,6 +1048,7 @@ class SubAdminOut(BaseModel):
     invite_code: str | None = None
     invite_code_id: int | None = None
     owned_invite_count: int = 0
+    is_debug: bool = False
     created_at: datetime | None = None
 
 
@@ -981,13 +1072,14 @@ def _sub_admin_out(db: Session, user: User) -> SubAdminOut:
         invite_code=invite_code,
         invite_code_id=invite_code_id,
         owned_invite_count=owned_invite_count,
+        is_debug=bool(getattr(user, "is_debug", False)),
         created_at=user.created_at,
     )
 
 
 @router.get("/sub-admins", response_model=list[SubAdminOut])
-def get_sub_admins(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
-    return [_sub_admin_out(db, u) for u in list_sub_admins(db)]
+def get_sub_admins(db: Session = Depends(get_db), admin: User = Depends(get_current_super_admin)):
+    return [_sub_admin_out(db, u) for u in list_sub_admins(db, include_debug=is_sudo(admin))]
 
 
 def _invite_out(db: Session, row: InviteCode) -> InviteOut:
@@ -1005,6 +1097,7 @@ def _invite_out(db: Session, row: InviteCode) -> InviteOut:
         note=row.note,
         owner_id=row.owner_id,
         owner_nickname=owner_nickname,
+        is_debug=bool(getattr(row, "is_debug", False)),
         created_at=row.created_at,
     )
 
@@ -1017,6 +1110,8 @@ def list_invites(db: Session = Depends(get_db), admin: User = Depends(get_curren
             InviteCode.owner_id == admin.id,
             InviteCode.kind == INVITE_KIND_PARTICIPANT,
         )
+    elif not is_sudo(admin):
+        q = q.filter(InviteCode.is_debug.is_(False))
     rows = q.order_by(InviteCode.id.desc()).all()
     return [_invite_out(db, r) for r in rows]
 
@@ -1050,9 +1145,12 @@ def create_invite(
         owner_id=owner_id,
         created_by=admin.id,
         enabled=True,
+        is_debug=is_sudo(admin),
     )
     db.add(row)
     kind_label = "子管邀请码" if kind == INVITE_KIND_SUB else "员工邀请码"
+    if is_sudo(admin):
+        kind_label = f"调试{kind_label}"
     owner_part = ""
     if owner_id is not None:
         owner = db.get(User, owner_id)
@@ -1236,13 +1334,15 @@ def _csv_response(filename: str, rows: list[list]) -> StreamingResponse:
 
 
 @router.get("/export/users.csv")
-def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
+def export_users(db: Session = Depends(get_db), admin: User = Depends(get_current_super_admin)):
+    include_debug = is_sudo(admin)
     header = [
         "id",
         "public_id",
         "nickname",
         "email",
         "status",
+        "is_debug",
         "survey_status",
         "total_score",
         "sessions_count",
@@ -1255,7 +1355,10 @@ def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_su
         "created_at",
     ]
     rows: list[list] = [header]
-    users = db.query(User).filter(User.role == "participant").order_by(User.id).all()
+    q = db.query(User).filter(User.role == "participant")
+    if not include_debug:
+        q = q.filter(User.is_debug.is_(False))
+    users = q.order_by(User.id).all()
     for u in users:
         total, sessions = user_game_stats(db, u.id)
         p = latest_personality(db, u.id)
@@ -1266,6 +1369,7 @@ def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_su
                 u.nickname,
                 u.email,
                 u.status,
+                "1" if getattr(u, "is_debug", False) else "0",
                 survey_status_for_user(db, u.id),
                 total,
                 sessions,
@@ -1279,11 +1383,13 @@ def export_users(db: Session = Depends(get_db), _: User = Depends(get_current_su
             ]
         )
     stamp = datetime.now(UTC).strftime("%Y%m%d")
-    return _csv_response(f"yangmind_users_{stamp}.csv", rows)
+    name = f"yangmind_users_{'debug_' if include_debug else ''}{stamp}.csv"
+    return _csv_response(name, rows)
 
 
 @router.get("/export/surveys.csv")
-def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
+def export_surveys(db: Session = Depends(get_db), admin: User = Depends(get_current_super_admin)):
+    include_debug = is_sudo(admin)
     header = [
         "record_source",
         "retake_no",
@@ -1292,6 +1398,7 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
         "user_public_id",
         "nickname",
         "email",
+        "is_debug",
         "response_id",
         "status",
         "quality_passed",
@@ -1320,6 +1427,8 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
         user = db.get(User, resp.user_id)
         if user is None:
             continue
+        if not include_debug and getattr(user, "is_debug", False):
+            continue
         telemetry = (
             db.query(SurveyQualityTelemetry)
             .filter(SurveyQualityTelemetry.response_id == resp.id)
@@ -1333,6 +1442,7 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
             user.public_id,
             user.nickname,
             user.email,
+            "1" if getattr(user, "is_debug", False) else "0",
             resp.id,
             resp.status,
             resp.quality_passed if resp.quality_passed is not None else "",
@@ -1359,6 +1469,8 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
         actor = db.get(User, archive.authorized_by_user_id)
         if user is None:
             continue
+        if not include_debug and getattr(user, "is_debug", False):
+            continue
         snapshot = archive.response_snapshot or {}
         response_data = snapshot.get("response") or {}
         telemetry_data = snapshot.get("quality_telemetry") or {}
@@ -1371,6 +1483,7 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
             user.public_id,
             user.nickname,
             user.email,
+            "1" if getattr(user, "is_debug", False) else "0",
             archive.original_response_id,
             "submitted",
             response_data.get("quality_passed", ""),
@@ -1410,14 +1523,19 @@ def export_surveys(db: Session = Depends(get_db), _: User = Depends(get_current_
                     ]
                 )
     stamp = datetime.now(UTC).strftime("%Y%m%d")
-    return _csv_response(f"yangmind_surveys_{stamp}.csv", rows)
+    return _csv_response(
+        f"yangmind_surveys_{'debug_' if include_debug else ''}{stamp}.csv",
+        rows,
+    )
 
 
 @router.get("/export/rounds.csv")
-def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_super_admin)):
+def export_rounds(db: Session = Depends(get_db), admin: User = Depends(get_current_super_admin)):
+    include_debug = is_sudo(admin)
     header = [
         "user_public_id",
         "nickname",
+        "is_debug",
         "session_id",
         "match_id",
         "mode",
@@ -1456,6 +1574,8 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
     for sess in sessions:
         user = db.get(User, sess.user_id)
         if user is None:
+            continue
+        if not include_debug and getattr(user, "is_debug", False):
             continue
         scene_key = sess.scene.scene_key if sess.scene else ""
         rounds = sorted(sess.rounds, key=lambda r: r.round_no)
@@ -1567,6 +1687,7 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
                 [
                     user.public_id,
                     user.nickname,
+                    "1" if getattr(user, "is_debug", False) else "0",
                     sess.id,
                     match.id if match else "",
                     sess.mode,
@@ -1627,6 +1748,7 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
                 [
                     user.public_id,
                     user.nickname,
+                    "1" if getattr(user, "is_debug", False) else "0",
                     sess.id,
                     match.id if match else "",
                     sess.mode,
@@ -1661,4 +1783,7 @@ def export_rounds(db: Session = Depends(get_db), _: User = Depends(get_current_s
                 ]
             )
     stamp = datetime.now(UTC).strftime("%Y%m%d")
-    return _csv_response(f"yangmind_rounds_{stamp}.csv", rows)
+    return _csv_response(
+        f"yangmind_rounds_{'debug_' if include_debug else ''}{stamp}.csv",
+        rows,
+    )

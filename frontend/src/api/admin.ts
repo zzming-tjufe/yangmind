@@ -42,6 +42,7 @@ export type AdminUser = {
   quality_review_status: string | null;
   quality_soft_flags: string[];
   quality_hard_exclusion: boolean;
+  is_debug?: boolean;
 };
 
 export type SurveyQualityReview = {
@@ -112,6 +113,7 @@ export type InviteCode = {
   note: string;
   owner_id?: number | null;
   owner_nickname?: string | null;
+  is_debug?: boolean;
   created_at?: string;
 };
 
@@ -124,6 +126,7 @@ export type SubAdmin = {
   invite_code?: string | null;
   invite_code_id?: number | null;
   owned_invite_count?: number;
+  is_debug?: boolean;
   created_at?: string | null;
 };
 

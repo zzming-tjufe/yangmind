@@ -20,6 +20,8 @@ class InviteCode(Base):
     # 员工邀请码归属哪个子管（由其转发）；子管邀请码通常为空
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # sudo 发出的邀请码为调试码；用该码注册的用户也会打 is_debug
+    is_debug: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

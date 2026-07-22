@@ -17,6 +17,56 @@ def _existing_columns(engine, table: str) -> set[str]:
     return {c["name"] for c in insp.get_columns(table)}
 
 
+def ensure_nickname_unique_index(engine) -> None:
+    """为已有库补上昵称唯一索引（大小写不敏感）；冲突昵称自动加后缀。"""
+    tables = inspect(engine).get_table_names()
+    if "users" not in tables:
+        return
+    with engine.begin() as conn:
+        dialect = engine.dialect.name
+        # 先处理重复昵称（保留 id 最小的一条）
+        if dialect == "sqlite":
+            dup_rows = conn.execute(
+                text(
+                    "SELECT lower(nickname) AS nk FROM users "
+                    "GROUP BY lower(nickname) HAVING COUNT(*) > 1"
+                )
+            ).fetchall()
+        else:
+            dup_rows = conn.execute(
+                text(
+                    "SELECT lower(nickname) AS nk FROM users "
+                    "GROUP BY lower(nickname) HAVING COUNT(*) > 1"
+                )
+            ).fetchall()
+        for (nk,) in dup_rows:
+            users = conn.execute(
+                text(
+                    "SELECT id, nickname FROM users WHERE lower(nickname) = :nk ORDER BY id ASC"
+                ),
+                {"nk": nk},
+            ).fetchall()
+            for uid, nick in users[1:]:
+                new_nick = f"{nick}#{uid}"
+                # 极端情况下仍冲突则再拼随机后缀
+                exists = conn.execute(
+                    text("SELECT 1 FROM users WHERE lower(nickname) = lower(:n) LIMIT 1"),
+                    {"n": new_nick},
+                ).first()
+                if exists:
+                    new_nick = f"{nick}#{uid}x"
+                conn.execute(
+                    text("UPDATE users SET nickname = :n WHERE id = :id"),
+                    {"n": new_nick, "id": uid},
+                )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_nickname_lower "
+                "ON users (lower(nickname))"
+            )
+        )
+
+
 def ensure_rbac_schema(engine) -> None:
     """为已有库补上多层权限相关列（create_all 不会改旧表）。"""
     user_cols = _existing_columns(engine, "users")
@@ -24,6 +74,8 @@ def ensure_rbac_schema(engine) -> None:
     stmts: list[str] = []
     if "users" in inspect(engine).get_table_names() and "invited_by_code_id" not in user_cols:
         stmts.append("ALTER TABLE users ADD COLUMN invited_by_code_id INTEGER")
+    if "users" in inspect(engine).get_table_names() and "is_debug" not in user_cols:
+        stmts.append("ALTER TABLE users ADD COLUMN is_debug BOOLEAN DEFAULT FALSE")
     if "invite_codes" in inspect(engine).get_table_names():
         if "kind" not in invite_cols:
             stmts.append(
@@ -31,6 +83,8 @@ def ensure_rbac_schema(engine) -> None:
             )
         if "owner_id" not in invite_cols:
             stmts.append("ALTER TABLE invite_codes ADD COLUMN owner_id INTEGER")
+        if "is_debug" not in invite_cols:
+            stmts.append("ALTER TABLE invite_codes ADD COLUMN is_debug BOOLEAN DEFAULT FALSE")
     if not stmts:
         return
     with engine.begin() as conn:
@@ -43,6 +97,12 @@ def ensure_rbac_schema(engine) -> None:
                     "UPDATE invite_codes SET kind = 'participant' "
                     "WHERE kind IS NULL OR kind = ''"
                 )
+            )
+        if "is_debug" not in user_cols:
+            conn.execute(text("UPDATE users SET is_debug = FALSE WHERE is_debug IS NULL"))
+        if "is_debug" not in invite_cols:
+            conn.execute(
+                text("UPDATE invite_codes SET is_debug = FALSE WHERE is_debug IS NULL")
             )
 
 

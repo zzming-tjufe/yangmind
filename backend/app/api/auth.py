@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,10 +34,11 @@ def _public_id_for_user(user_id: int) -> str:
 
 
 def _normalize_login(raw: str) -> str:
-    """管理员可用别名 admin 登录；其余按邮箱处理。"""
-    value = raw.lower().strip()
+    """管理员可用别名 admin 登录；含 @ 按邮箱，否则保留原串供昵称匹配。"""
+    value = raw.strip()
+    lowered = value.lower()
     alias = settings.seed_admin_login.lower().strip()
-    if value == alias or value == "admin":
+    if lowered == alias or lowered == "admin":
         return settings.seed_admin_email.lower().strip()
     return value
 
@@ -49,6 +50,23 @@ def _is_reserved_admin_identity(raw: str) -> bool:
         "admin",
         settings.seed_admin_email.lower().strip(),
     }
+
+
+def _normalize_nickname(raw: str) -> str:
+    return raw.strip()
+
+
+def _find_user_for_login(db: Session, raw: str) -> User | None:
+    """邮箱（含 @ 或管理员别名）或昵称（大小写不敏感）登录。"""
+    value = _normalize_login(raw)
+    lowered = value.lower()
+    if "@" in value or lowered == settings.seed_admin_email.lower().strip():
+        return db.query(User).filter(User.email == lowered).first()
+    return (
+        db.query(User)
+        .filter(func.lower(User.nickname) == lowered)
+        .first()
+    )
 
 
 def _load_valid_invite(db: Session, raw: str) -> InviteCode:
@@ -101,15 +119,23 @@ def _consume_invite(db: Session, invite: InviteCode) -> InviteCode:
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     email = body.email.lower().strip()
-    nickname = body.nickname.strip()
+    nickname = _normalize_nickname(body.nickname)
     if not nickname:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请输入昵称")
-    if _is_reserved_admin_identity(email):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该账号为系统保留，请更换邮箱")
+    if _is_reserved_admin_identity(email) or _is_reserved_admin_identity(nickname):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该账号为系统保留，请更换邮箱或昵称")
 
     exists = db.query(User).filter(User.email == email).first()
     if exists:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该邮箱已注册")
+
+    nick_taken = (
+        db.query(User)
+        .filter(func.lower(User.nickname) == nickname.lower())
+        .first()
+    )
+    if nick_taken:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该昵称已被使用，请换一个")
 
     invite = _load_valid_invite(db, body.invite_code)
     kind = (invite.kind or INVITE_KIND_PARTICIPANT).strip()
@@ -127,6 +153,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
             nickname=nickname,
             role=role,
             status="active",
+            is_debug=bool(getattr(invite, "is_debug", False)),
             invited_by_code_id=invite.id,
         )
         db.add(user)
@@ -147,7 +174,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="注册请求发生冲突，请重试；若邮箱已注册请直接登录",
+            detail="注册请求发生冲突，请重试；若邮箱或昵称已占用请直接登录或更换",
         ) from None
     except Exception:
         db.rollback()
@@ -160,8 +187,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    email = _normalize_login(body.email)
-    user = db.query(User).filter(User.email == email).first()
+    user = _find_user_for_login(db, body.email)
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或密码错误")
     if user.status != "active":

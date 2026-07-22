@@ -35,6 +35,7 @@ class AdminUserRow(BaseModel):
     quality_review_status: str | None = None
     quality_soft_flags: list[str] = Field(default_factory=list)
     quality_hard_exclusion: bool = False
+    is_debug: bool = False
 
 
 class AdminUsersOut(BaseModel):

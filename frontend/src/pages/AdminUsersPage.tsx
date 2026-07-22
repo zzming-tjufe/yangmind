@@ -15,6 +15,8 @@ import {
   type AdminUser,
   type SurveyQualityReview,
 } from "../api/admin";
+import { AdminListStatus } from "../components/AdminListStatus";
+import { ModalOverlay } from "../components/ModalPortal";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { isSuperAdmin } from "../lib/roles";
@@ -31,19 +33,32 @@ export function AdminUsersPage() {
   const [qualityReviewUser, setQualityReviewUser] = useState<AdminUser | null>(null);
   const [reviewReason, setReviewReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
 
   async function load(search?: string) {
-    const u = await getAdminUsers(search);
-    setUsers(u.items);
-    if (superAdmin) {
-      setStats(await getAdminStats());
-    } else {
-      setStats(null);
+    setLoading(true);
+    try {
+      if (superAdmin) {
+        const [u, s] = await Promise.all([getAdminUsers(search), getAdminStats()]);
+        setUsers(u.items);
+        setStats(s);
+      } else {
+        const u = await getAdminUsers(search);
+        setUsers(u.items);
+        setStats(null);
+      }
+      setReady(true);
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
-    load().catch((e) => toast(e instanceof ApiError ? e.message : "加载失败"));
+    load().catch((e) => {
+      setLoading(false);
+      toast(e instanceof ApiError ? e.message : "加载失败");
+    });
   }, [toast]);
 
   async function openProfile(u: AdminUser) {
@@ -153,6 +168,10 @@ export function AdminUsersPage() {
 
   return (
     <div className="page">
+      {!ready ? (
+        <AdminListStatus loading page message="正在加载参与者数据…" />
+      ) : (
+        <>
       {superAdmin ? (
         <div className="statgrid admin-stats">
           {[
@@ -170,7 +189,7 @@ export function AdminUsersPage() {
         </div>
       ) : (
         <p style={{ marginBottom: 16, color: "#666" }}>
-          你只能查看和管理通过你名下邀请码注册的员工。
+          这里只能看到用你转发的邀请码注册的参与者。
         </p>
       )}
 
@@ -182,7 +201,7 @@ export function AdminUsersPage() {
           </div>
           <div className="export-actions">
             <button className="secondary" type="button" onClick={() => onExport("users")}>
-              导出用户
+              导出参与者
             </button>
             <button className="secondary" type="button" onClick={() => onExport("surveys")}>
               导出问卷
@@ -196,7 +215,7 @@ export function AdminUsersPage() {
 
       <section className="table card user-table">
         <div className="tablehead">
-          <h3>用户与人格结果</h3>
+          <h3>参与者与人格结果</h3>
           <input
             className="search"
             placeholder="搜索姓名 / ID / 邮箱"
@@ -205,6 +224,7 @@ export function AdminUsersPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter") load(q).catch(() => undefined);
             }}
+            disabled={loading}
           />
         </div>
         <div className="row header admin-user-head">
@@ -216,12 +236,22 @@ export function AdminUsersPage() {
           <span>状态</span>
           <span>操作</span>
         </div>
-        {users.map((u) => (
+        {loading ? (
+          <AdminListStatus loading message="正在刷新…" />
+        ) : users.length === 0 ? (
+          <AdminListStatus empty emptyText="暂无用户" />
+        ) : (
+          users.map((u) => (
           <div className="row admin-user-row" key={u.id}>
             <span className="user">
               <i>{u.nickname.slice(0, 1)}</i>
               <b>
                 {u.nickname}
+                {u.is_debug ? (
+                  <span className="badge debug" style={{ marginLeft: 8 }}>
+                    调试
+                  </span>
+                ) : null}
                 <small style={{ display: "block", color: "#999" }}>
                   {u.public_id} · {u.email}
                 </small>
@@ -286,11 +316,14 @@ export function AdminUsersPage() {
               </button>
             </div>
           </div>
-        ))}
+          ))
+        )}
       </section>
+        </>
+      )}
 
       {profile && (
-        <div className="profile-overlay" onClick={() => setProfile(null)}>
+        <ModalOverlay onClose={() => setProfile(null)}>
           <section className="profile-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
             <header className="profile-modal-head">
               <div className="profile-person">
@@ -337,11 +370,11 @@ export function AdminUsersPage() {
               </div>
             </div>
           </section>
-        </div>
+        </ModalOverlay>
       )}
 
       {qualityReview && qualityReviewUser && (
-        <div className="profile-overlay" onClick={() => setQualityReview(null)}>
+        <ModalOverlay onClose={() => setQualityReview(null)}>
           <section className="profile-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
             <header className="profile-modal-head">
               <div className="profile-person">
@@ -390,7 +423,7 @@ export function AdminUsersPage() {
               </div>
             </div>
           </section>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

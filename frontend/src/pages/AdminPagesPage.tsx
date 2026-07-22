@@ -5,6 +5,8 @@ import {
   patchAdminPage,
   type AdminPage,
 } from "../api/admin";
+import { AdminListStatus } from "../components/AdminListStatus";
+import { ModalOverlay } from "../components/ModalPortal";
 import { useToast } from "../context/ToastContext";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -20,13 +22,22 @@ export function AdminPagesPage() {
   const [title, setTitle] = useState("");
   const [subtitle, setSubtitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    setPages(await getAdminPages());
+    setLoading(true);
+    try {
+      setPages(await getAdminPages());
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((e) => toast(e instanceof ApiError ? e.message : "加载失败"));
+    load().catch((e) => {
+      setLoading(false);
+      toast(e instanceof ApiError ? e.message : "加载失败");
+    });
   }, [toast]);
 
   function openEdit(p: AdminPage) {
@@ -80,7 +91,12 @@ export function AdminPagesPage() {
           <h3>参与端页面</h3>
         </div>
         <div className="manage-list">
-          {pages.map((p) => (
+          {loading ? (
+            <AdminListStatus loading />
+          ) : pages.length === 0 ? (
+            <AdminListStatus empty emptyText="暂无页面配置" />
+          ) : (
+            pages.map((p) => (
             <div className="manage-item" key={p.id}>
               <i>{p.page_key.slice(0, 2).toUpperCase()}</i>
               <div>
@@ -113,13 +129,13 @@ export function AdminPagesPage() {
                 )}
               </div>
             </div>
-          ))}
-          {pages.length === 0 && <div className="manage-item">暂无页面配置</div>}
+            ))
+          )}
         </div>
       </section>
 
       {editing && (
-        <div className="profile-overlay" onClick={() => setEditing(null)}>
+        <ModalOverlay onClose={() => setEditing(null)}>
           <div className="profile-modal cms-modal" onClick={(e) => e.stopPropagation()}>
             <div className="profile-modal-head">
               <div className="profile-person">
@@ -152,7 +168,7 @@ export function AdminPagesPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

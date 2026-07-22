@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import * as surveyApi from "../api/survey";
 import type { MyResponse, SurveyInstrument } from "../api/survey";
+import { useDemo } from "../context/DemoContext";
 import { useToast } from "../context/ToastContext";
 import { useSiteContent } from "../hooks/useSite";
 
@@ -21,6 +22,7 @@ function focusQuestion(itemNo: number, flash = true) {
 
 export function BfiPage() {
   const { toast } = useToast();
+  const { demoMode, getMyResponse, saveAnswers, submitSurvey } = useDemo();
   const { byKey: content } = useSiteContent();
   const [introDone, setIntroDone] = useState(false);
   const [instrument, setInstrument] = useState<SurveyInstrument | null>(null);
@@ -59,7 +61,10 @@ export function BfiPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [inst, resp] = await Promise.all([surveyApi.getBfi(), surveyApi.getMyResponse()]);
+        const [inst, resp] = await Promise.all([
+          surveyApi.getBfi(),
+          demoMode ? getMyResponse() : surveyApi.getMyResponse(),
+        ]);
         if (cancelled) return;
         setInstrument(inst);
         setMine(resp);
@@ -78,7 +83,7 @@ export function BfiPage() {
     return () => {
       cancelled = true;
     };
-  }, [toast]);
+  }, [toast, demoMode, getMyResponse]);
 
   const answered = Object.keys(answers).length;
   const progress = Math.round((answered / 44) * 100);
@@ -87,11 +92,37 @@ export function BfiPage() {
     () => instrument?.items.slice(start, start + PAGE_SIZE) ?? [],
     [instrument, start],
   );
+  const groupProgress = useMemo(() => {
+    return [1, 2, 3, 4].map((g) => {
+      const from = (g - 1) * PAGE_SIZE + 1;
+      const to = g * PAGE_SIZE;
+      let done = 0;
+      for (let n = from; n <= to; n += 1) {
+        if (answers[n]) done += 1;
+      }
+      return { group: g, done, total: PAGE_SIZE, from, to };
+    });
+  }, [answers]);
+  const pageDone = pageItems.filter((item) => answers[item.item_no]).length;
+
+  function jumpToUnanswered() {
+    const allItems = instrument?.items ?? [];
+    const first = allItems.find((item) => !answers[item.item_no]);
+    if (!first) {
+      toast("全部题目已作答");
+      return;
+    }
+    const targetPage = Math.ceil(first.item_no / PAGE_SIZE);
+    toast(`已定位到第 ${first.item_no} 题`);
+    goPage(targetPage, { skipCheck: true, focusItemNo: first.item_no });
+  }
 
   async function onAnswer(itemNo: number, value: number) {
     setAnswers((prev) => ({ ...prev, [itemNo]: value }));
     try {
-      const resp = await surveyApi.saveAnswers([{ item_no: itemNo, value }]);
+      const resp = demoMode
+        ? await saveAnswers([{ item_no: itemNo, value }])
+        : await surveyApi.saveAnswers([{ item_no: itemNo, value }]);
       setMine(resp);
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "保存失败");
@@ -161,22 +192,29 @@ export function BfiPage() {
       return;
     }
     const confirmed = window.confirm(
-      "人格问卷正式提交后只有一次机会，不能自行修改或重做。请确认你已认真、如实完成全部题目。\n\n确定正式提交吗？",
+      demoMode
+        ? "演示提交仅保存在临时内存中，不会写入正式库，也不会进入 CSV。可随时重置后重做。\n\n确定提交演示问卷吗？"
+        : "人格问卷正式提交后只有一次机会，不能自行修改或重做。请确认你已认真、如实完成全部题目。\n\n确定正式提交吗？",
     );
     if (!confirmed) return;
     setBusy(true);
     try {
       recordCurrentPageTime();
-      const resp = await surveyApi.submitSurvey(attentionAnswers, {
+      const telemetry = {
         diligence_answers: diligenceAnswers,
         page_timings_seconds: pageTimings.current,
         blur_count: blurCount.current,
-      });
+      };
+      const resp = demoMode
+        ? await submitSurvey(attentionAnswers, telemetry, answers)
+        : await surveyApi.submitSurvey(attentionAnswers, telemetry);
       setMine(resp);
       toast(
-        resp.unlock_games
-          ? "问卷已提交，博弈入口已解锁"
-          : "问卷已提交，本次答卷未进入真人博弈样本",
+        demoMode
+          ? "演示问卷已提交，可进入博弈演示（数据不保存）"
+          : resp.unlock_games
+            ? "问卷已提交，博弈入口已解锁"
+            : "问卷已提交，本次答卷未进入真人博弈样本",
       );
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "提交失败");
@@ -201,10 +239,15 @@ export function BfiPage() {
         <section className="hero card">
           <div>
             <div className="eyebrow">
-              实验已完成 · 人格反馈
+              {demoMode ? "演示反馈 · 数据不保存" : "实验已完成 · 人格反馈"}
             </div>
             <h2>你的人格轮廓已生成</h2>
-            <p>{p.summary_label}。结果用于解释博弈中的决策倾向，不代表能力高低。</p>
+            <p>
+              {p.summary_label}。
+              {demoMode
+                ? "这是演示结果，可点顶部「重置演示」后重做。"
+                : "结果用于解释博弈中的决策倾向，不代表能力高低。"}
+            </p>
           </div>
           <div className="ring" style={{ ["--p" as string]: "360deg" }}>
             <b>100%</b>
@@ -344,180 +387,207 @@ export function BfiPage() {
   }
 
   const surveyHero = content["bfi.survey_hero"];
+  const scaleLabels = [
+    ["1", "非常不同意"],
+    ["2", "比较不同意"],
+    ["3", "中立"],
+    ["4", "比较同意"],
+    ["5", "非常同意"],
+  ] as const;
+
+  function renderScale(
+    name: string,
+    value: number | undefined,
+    onPick: (v: number) => void,
+  ) {
+    return (
+      <div className="bfi-scale" role="radiogroup" aria-label="符合程度">
+        {[1, 2, 3, 4, 5].map((v) => (
+          <label key={v} className={value === v ? "picked" : undefined} title={scaleLabels[v - 1][1]}>
+            <input
+              type="radio"
+              name={name}
+              checked={value === v}
+              onChange={() => onPick(v)}
+            />
+            <span className="bfi-scale-cell">{v}</span>
+          </label>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="page bfi-survey-page">
-      <section className="hero card">
-        <div>
-          <div className="eyebrow">问卷进行中 · 已答 {answered} / 44</div>
-          <h2>{surveyHero?.title || "BFI-44 问卷作答"}</h2>
-          <p>
-            {surveyHero?.body ||
-              "请根据真实、稳定的自己作答。1 = 非常不同意，5 = 非常同意。"}
-          </p>
-        </div>
-        <div className="ring" style={{ ["--p" as string]: `${progress * 3.6}deg` }}>
-          <b>{progress}%</b>
-        </div>
-      </section>
-      <div className="quality">
-        <i>✓</i>
-        <div>
-          <b>答案已自动保存</b>
-          <small>第 {qpage} / 4 组 · 已作答 {answered} / 44</small>
-        </div>
-      </div>
-      <section className="question-card card">
-        <div className="qhead">
+      <header className="bfi-toolbar card">
+        <div className="bfi-toolbar-main">
           <div>
-            <span>
-              第 {qpage} / 4 组
-            </span>
-            <br />
-            <b>请判断以下描述与你的符合程度</b>
+            <div className="eyebrow">BFI-44 · 人格问卷</div>
+            <h2>{surveyHero?.title || "请判断以下描述与你的符合程度"}</h2>
           </div>
-          <span>
-            {answered} / 44 已作答
-          </span>
+          <span className="bfi-autosave">自动保存</span>
         </div>
-        <div key={qpage} className="qpage-anim">
-          {pageItems.map((item) => (
-            <div
-              className={`qrow${answers[item.item_no] ? " answered" : ""}`}
-              key={item.item_no}
-              data-item-no={item.item_no}
-            >
-              <div className="qtext">
-                <b>{String(item.item_no).padStart(2, "0")}</b>
-                我认为自己是一个{item.stem}的人。
+        <div className="bfi-toolbar-meta">
+          <span>
+            第 {qpage} 组 / 共 4 组
+          </span>
+          <div className="bfi-progress-track" aria-hidden>
+            <i style={{ width: `${progress}%` }} />
+          </div>
+          <b>
+            {answered} / 44
+          </b>
+        </div>
+        <p className="bfi-toolbar-hint">
+          {surveyHero?.body ||
+            "请根据真实、稳定的自己作答。1 = 非常不同意，5 = 非常同意。答案会自动保存。"}
+        </p>
+      </header>
+
+      <div className="bfi-layout">
+        <section className="bfi-panel card">
+          <div className="bfi-matrix-head" aria-hidden>
+            <span className="bfi-matrix-stem-label">题目</span>
+            <div className="bfi-matrix-scale-labels">
+              {scaleLabels.map(([n, label]) => (
+                <span key={n}>
+                  <b>{n}</b>
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div key={qpage} className="qpage-anim bfi-matrix">
+            {pageItems.map((item) => (
+              <div
+                className={`bfi-qrow${answers[item.item_no] ? " answered" : ""}`}
+                key={item.item_no}
+                data-item-no={item.item_no}
+              >
+                <div className="bfi-qtext">
+                  <b>{String(item.item_no).padStart(2, "0")}</b>
+                  <span>我认为自己是一个{item.stem}的人。</span>
+                </div>
+                {renderScale(`q${item.item_no}`, answers[item.item_no], (v) =>
+                  onAnswer(item.item_no, v),
+                )}
               </div>
-              <div className="scale">
-                {[1, 2, 3, 4, 5].map((v) => (
-                  <label key={v} className={answers[item.item_no] === v ? "picked" : undefined}>
-                    <input
-                      type="radio"
-                      name={`q${item.item_no}`}
-                      checked={answers[item.item_no] === v}
-                      onChange={() => onAnswer(item.item_no, v)}
-                    />
-                    <i />
-                    {v}
-                  </label>
+            ))}
+
+            {qpage === 4 && (instrument?.quality_checks.length ?? 0) > 0 ? (
+              <div className="quality-check-block">
+                <div className="quality-check-heading">
+                  <b>作答确认</b>
+                  <span>以下题目不计入人格得分，请按题目中的要求选择。</span>
+                </div>
+                {instrument?.quality_checks.map((check, index) => (
+                  <div
+                    className={`bfi-qrow${attentionAnswers[check.check_id] ? " answered" : ""}`}
+                    key={check.check_id}
+                    data-quality-check={check.check_id}
+                  >
+                    <div className="bfi-qtext">
+                      <b>C{index + 1}</b>
+                      <span>{check.stem}</span>
+                    </div>
+                    {renderScale(check.check_id, attentionAnswers[check.check_id], (v) =>
+                      setAttentionAnswers((previous) => ({
+                        ...previous,
+                        [check.check_id]: v,
+                      })),
+                    )}
+                  </div>
                 ))}
               </div>
-            </div>
-          ))}
-          {qpage === 4 && (instrument?.quality_checks.length ?? 0) > 0 ? (
-            <div className="quality-check-block">
-              <div className="quality-check-heading">
-                <b>作答确认</b>
-                <span>以下题目不计入人格得分，请按题目中的要求选择。</span>
-              </div>
-              {instrument?.quality_checks.map((check, index) => (
-                <div
-                  className={`qrow${attentionAnswers[check.check_id] ? " answered" : ""}`}
-                  key={check.check_id}
-                  data-quality-check={check.check_id}
-                >
-                  <div className="qtext">
-                    <b>C{index + 1}</b>
-                    {check.stem}
-                  </div>
-                  <div className="scale">
-                    {[1, 2, 3, 4, 5].map((value) => (
-                      <label
-                        key={value}
-                        className={
-                          attentionAnswers[check.check_id] === value ? "picked" : undefined
-                        }
-                      >
-                        <input
-                          type="radio"
-                          name={check.check_id}
-                          checked={attentionAnswers[check.check_id] === value}
-                          onChange={() =>
-                            setAttentionAnswers((previous) => ({
-                              ...previous,
-                              [check.check_id]: value,
-                            }))
-                          }
-                        />
-                        <i />
-                        {value}
-                      </label>
-                    ))}
-                  </div>
+            ) : null}
+
+            {qpage === 4 ? (
+              <div className="quality-check-block" data-diligence-check>
+                <div className="quality-check-heading">
+                  <b>作答质量确认</b>
+                  <span>以下内容不计入人格得分，仅用于数据质量复核。</span>
                 </div>
-              ))}
-            </div>
-          ) : null}
-          {qpage === 4 ? (
-            <div className="quality-check-block" data-diligence-check>
-              <div className="quality-check-heading">
-                <b>作答质量确认</b>
-                <span>以下内容不计入人格得分，仅用于数据质量复核。</span>
+                {[
+                  ["diligence_read", "我认真阅读了每道题，并根据题意作答。"],
+                  ["diligence_authentic", "我的回答能够反映日常、稳定的自己。"],
+                  ["diligence_technical", "本次作答存在明显技术问题，影响了我的回答。"],
+                ].map(([checkId, stem], index) => (
+                  <div
+                    className={`bfi-qrow${diligenceAnswers[checkId] ? " answered" : ""}`}
+                    key={checkId}
+                  >
+                    <div className="bfi-qtext">
+                      <b>S{index + 1}</b>
+                      <span>{stem}</span>
+                    </div>
+                    {renderScale(checkId, diligenceAnswers[checkId], (v) =>
+                      setDiligenceAnswers((previous) => ({
+                        ...previous,
+                        [checkId]: v,
+                      })),
+                    )}
+                  </div>
+                ))}
               </div>
-              {[
-                ["diligence_read", "我认真阅读了每道题，并根据题意作答。"],
-                ["diligence_authentic", "我的回答能够反映日常、稳定的自己。"],
-                ["diligence_technical", "本次作答存在明显技术问题，影响了我的回答。"],
-              ].map(([checkId, stem], index) => (
-                <div
-                  className={`qrow${diligenceAnswers[checkId] ? " answered" : ""}`}
-                  key={checkId}
-                >
-                  <div className="qtext">
-                    <b>S{index + 1}</b>
-                    {stem}
-                  </div>
-                  <div className="scale">
-                    {[1, 2, 3, 4, 5].map((value) => (
-                      <label
-                        key={value}
-                        className={diligenceAnswers[checkId] === value ? "picked" : undefined}
-                      >
-                        <input
-                          type="radio"
-                          name={checkId}
-                          checked={diligenceAnswers[checkId] === value}
-                          onChange={() =>
-                            setDiligenceAnswers((previous) => ({
-                              ...previous,
-                              [checkId]: value,
-                            }))
-                          }
-                        />
-                        <i />
-                        {value}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ))}
+            ) : null}
+          </div>
+
+          <div className="qfoot bfi-qfoot">
+            <button
+              className="secondary"
+              type="button"
+              disabled={qpage === 1}
+              onClick={() => goPage(Math.max(1, qpage - 1))}
+            >
+              ← 上一组
+            </button>
+            <span>
+              本组 {pageDone}/{PAGE_SIZE}
+            </span>
+            {qpage < 4 ? (
+              <button className="primary" type="button" onClick={() => goPage(qpage + 1)}>
+                下一组 →
+              </button>
+            ) : (
+              <button className="primary" type="button" disabled={busy} onClick={onSubmit}>
+                {busy ? "提交中…" : answered < 44 ? `还差 ${44 - answered} 题` : "提交问卷 →"}
+              </button>
+            )}
+          </div>
+        </section>
+
+        <aside className="bfi-side card">
+          <div className="bfi-side-title">答题进度</div>
+          <div className="bfi-side-total">
+            <b>{answered} / 44</b>
+            <span>{progress}%</span>
+          </div>
+          <div className="bfi-side-ring-wrap" aria-hidden>
+            <div className="ring" style={{ ["--p" as string]: `${progress * 3.6}deg` }}>
+              <b>{progress}%</b>
             </div>
-          ) : null}
-        </div>
-        <div className="qfoot">
-          <button
-            className="secondary"
-            type="button"
-            disabled={qpage === 1}
-            onClick={() => goPage(Math.max(1, qpage - 1))}
-          >
-            ← 上一组
+          </div>
+          <ul className="bfi-side-groups">
+            {groupProgress.map((g) => (
+              <li key={g.group} className={g.group === qpage ? "current" : g.done === g.total ? "done" : ""}>
+                <button type="button" onClick={() => goPage(g.group, { skipCheck: g.group < qpage })}>
+                  <span>
+                    第 {g.group} 组
+                    {g.group === qpage ? " · 当前" : ""}
+                  </span>
+                  <b>
+                    {g.done}/{g.total}
+                  </b>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button className="secondary bfi-side-jump" type="button" onClick={jumpToUnanswered}>
+            定位未答题
           </button>
-          <span>答案已同步</span>
-          {qpage < 4 ? (
-            <button className="primary" type="button" onClick={() => goPage(qpage + 1)}>
-              下一组 →
-            </button>
-          ) : (
-            <button className="primary" type="button" disabled={busy} onClick={onSubmit}>
-              {busy ? "提交中…" : answered < 44 ? `还差 ${44 - answered} 题` : "提交问卷 →"}
-            </button>
-          )}
-        </div>
-      </section>
+        </aside>
+      </div>
     </div>
   );
 }

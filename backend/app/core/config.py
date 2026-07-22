@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     seed_admin_nickname: str = "管理员"
     seed_admin_login: str = "admin"
 
+    # 调试账号 sudo（权限高于总管）。密码务必用环境变量 SUDO_PASSWORD，勿提交真实密码。
+    enable_sudo: bool = False
+    sudo_nickname: str = "sudo"
+    sudo_email: str = "sudo@yangmind.local"
+    sudo_password: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -43,6 +49,10 @@ class Settings(BaseSettings):
                 raise RuntimeError(
                     "生产环境必须设置足够长的 SECRET_KEY（至少 32 字符），"
                     "且不能使用默认开发密钥。请设置环境变量 SECRET_KEY 与 APP_ENV=production。"
+                )
+            if self.enable_sudo and not self.sudo_password.strip():
+                raise RuntimeError(
+                    "生产环境启用 ENABLE_SUDO 时必须设置 SUDO_PASSWORD。"
                 )
         elif using_default:
             print(

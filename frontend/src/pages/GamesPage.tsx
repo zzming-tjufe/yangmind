@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import * as gamesApi from "../api/games";
 import type { Comprehension, PvpMatch, Scene, StagProgress } from "../api/games";
+import * as surveyApi from "../api/survey";
+import type { Personality } from "../api/survey";
+import { useDemo } from "../context/DemoContext";
 import { useToast } from "../context/ToastContext";
 import { useSiteContent } from "../hooks/useSite";
 
@@ -53,6 +56,13 @@ function useElapsedSeconds(active: boolean) {
 
 export function GamesPage() {
   const { toast } = useToast();
+  const {
+    demoMode,
+    getScenes: demoGetScenes,
+    startBotSession,
+    playRound: demoPlayRound,
+    getMyResponse: demoGetMyResponse,
+  } = useDemo();
   const { byKey: content } = useSiteContent();
   const [progress, setProgress] = useState<StagProgress | null>(null);
   const [stage, setStage] = useState<Stage>("lobby");
@@ -62,6 +72,8 @@ export function GamesPage() {
   const [comprehensionAnswers, setComprehensionAnswers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [finishPersonality, setFinishPersonality] = useState<Personality | null>(null);
+  const [finishPersonalityLoading, setFinishPersonalityLoading] = useState(false);
   const lastHistLen = useRef(0);
   const matchFlashTimer = useRef<number | null>(null);
   const zeroPollKey = useRef("");
@@ -106,10 +118,10 @@ export function GamesPage() {
   );
 
   const reload = useCallback(async () => {
-    const data = await gamesApi.getScenes();
+    const data = demoMode ? await demoGetScenes() : await gamesApi.getScenes();
     setProgress(data);
     return data;
-  }, []);
+  }, [demoMode, demoGetScenes]);
 
   useEffect(() => {
     reload()
@@ -123,7 +135,39 @@ export function GamesPage() {
     };
   }, []);
 
+  /** 全部对局结束后拉取人格反馈（此前故意延迟到博弈完成才展示） */
   useEffect(() => {
+    if (stage !== "pvp" || pvp?.status !== "finished") {
+      setFinishPersonality(null);
+      setFinishPersonalityLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setFinishPersonalityLoading(true);
+    (async () => {
+      try {
+        const resp = demoMode
+          ? await demoGetMyResponse()
+          : await surveyApi.getMyResponse();
+        if (cancelled) return;
+        if (resp.feedback_unlocked && resp.personality) {
+          setFinishPersonality(resp.personality);
+        } else {
+          setFinishPersonality(null);
+        }
+      } catch {
+        if (!cancelled) setFinishPersonality(null);
+      } finally {
+        if (!cancelled) setFinishPersonalityLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stage, pvp?.status, pvp?.id, demoMode, demoGetMyResponse]);
+
+  useEffect(() => {
+    if (demoMode) return;
     if ((stage !== "matching" && stage !== "matched" && stage !== "pvp") || !pvp) return;
     if (pvp.status === "finished" || pvp.status === "cancelled") return;
 
@@ -148,7 +192,7 @@ export function GamesPage() {
         .catch(() => undefined);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [stage, pvp?.id, pvp?.status, reload, bindScene, enterMatchedFlash, toast]);
+  }, [demoMode, stage, pvp?.id, pvp?.status, reload, bindScene, enterMatchedFlash, toast]);
 
   // 轮次结算 / 超时提示
   useEffect(() => {
@@ -167,6 +211,7 @@ export function GamesPage() {
 
   // 倒计时归零时立刻拉一次，尽快触发超时结算
   useEffect(() => {
+    if (demoMode) return;
     if (stage !== "pvp" || !pvp || pvp.status !== "playing") return;
     if (secondsLeft > 0) return;
     const key = `${pvp.id}-${pvp.current_round}`;
@@ -179,7 +224,7 @@ export function GamesPage() {
         bindScene(m);
       })
       .catch(() => undefined);
-  }, [secondsLeft, stage, pvp, bindScene]);
+  }, [demoMode, secondsLeft, stage, pvp, bindScene]);
 
   async function enterStag() {
     if (!progress?.unlock_games) {
@@ -187,11 +232,17 @@ export function GamesPage() {
         progress?.survey_quality_failed
           ? "本次问卷未达到真人博弈的数据质量要求"
           : !progress?.survey_done
-            ? "请先完成 BFI-44 问卷"
+            ? demoMode
+              ? "请先在演示模式中提交问卷"
+              : "请先完成 BFI-44 问卷"
             : progress?.experiment_status !== "active"
               ? "实验暂未开放"
               : "当前无法开始",
       );
+      return;
+    }
+    if (demoMode) {
+      setStage("scenes");
       return;
     }
     if (!progress.comprehension_passed) {
@@ -249,6 +300,14 @@ export function GamesPage() {
     zeroPollKey.current = "";
     matchNotifiedId.current = null;
     try {
+      if (demoMode) {
+        const m = await startBotSession(s.scene_key);
+        setPvp(m);
+        bindScene(m, s);
+        toast("已匹配演示机器人（每轮约 60% 偏向一侧，长期均匀）");
+        setStage("pvp");
+        return;
+      }
       const m = await gamesApi.joinPvpQueue(s.scene_key);
       setPvp(m);
       bindScene(m, s);
@@ -277,14 +336,16 @@ export function GamesPage() {
 
   async function playPvp(choice: "A" | "B") {
     if (!pvp) return;
-    if (secondsLeft <= 0) {
+    if (!demoMode && secondsLeft <= 0) {
       toast("本轮已超时");
       return;
     }
     setBusy(true);
     try {
-      const next = await gamesApi.submitPvpChoice(pvp.id, choice, pvp.current_round);
-      if (next.id !== pvp.id) {
+      const next = demoMode
+        ? await demoPlayRound(pvp.id, choice)
+        : await gamesApi.submitPvpChoice(pvp.id, choice, pvp.current_round);
+      if (!demoMode && next.id !== pvp.id) {
         lastHistLen.current = 0;
         toast(`第一场景已完成，继续与同一对手进入「${next.scene_title}」`);
       }
@@ -292,10 +353,10 @@ export function GamesPage() {
       bindScene(next);
       if (next.status === "finished") {
         await reload();
-        toast("真人对局已结束");
+        toast(demoMode ? "演示对局已结束，可再次进入场景重玩" : "真人对局已结束");
       }
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
+      if (!demoMode && e instanceof ApiError && e.status === 409) {
         toast(e.message);
         const fresh = await gamesApi.getPvpMatch(pvp.id).catch(() => null);
         if (fresh) {
@@ -400,27 +461,34 @@ export function GamesPage() {
               <div className="forest" />
             </div>
             <div className="gamebody">
-              <span>协调博弈 · 真人匹配</span>
+              <span>{demoMode ? "协调博弈 · 演示机器人" : "协调博弈 · 真人匹配"}</span>
               <h3>猎鹿博弈</h3>
-              <p>匹配在线参与者同步对局；每轮 15 秒，超时未选本轮得 0 分。</p>
+              <p>
+                {demoMode
+                  ? "与演示机器人对局，可完整交互并重复提交；结果仅保存在本次演示内存中。"
+                  : "匹配在线参与者同步对局；每轮 15 秒，超时未选本轮得 0 分。"}
+              </p>
               <div className="stats">
                 <span>
                   <b>{progress?.rounds_per_scene ?? 10}</b>轮/场
                 </span>
                 <span>
-                  <b>真人</b>匹配
+                  <b>{demoMode ? "人机" : "真人"}</b>匹配
                 </span>
                 <span>
-                  <b>15</b>秒/轮
+                  <b>{demoMode ? "—" : "15"}</b>
+                  {demoMode ? "限时关闭" : "秒/轮"}
                 </span>
               </div>
               <button className="primary" type="button" onClick={enterStag}>
                 {progress?.unlock_games
-                  ? progress.active_match_id
-                    ? "继续正式实验 →"
-                    : progress.all_done || progress.participation_locked
-                      ? "查看实验状态 →"
-                      : "进入唯一一次正式实验 →"
+                  ? demoMode
+                    ? "进入演示对局 →"
+                    : progress.active_match_id
+                      ? "继续正式实验 →"
+                      : progress.all_done || progress.participation_locked
+                        ? "查看实验状态 →"
+                        : "进入唯一一次正式实验 →"
                   : progress?.survey_quality_failed
                     ? "无法进入真人匹配"
                     : "完成问卷后解锁 →"}
@@ -507,7 +575,10 @@ export function GamesPage() {
   if (stage === "scenes" && progress) {
     const firstRequiredScene = progress.scenes.find((item) => item.required);
     const cannotResume =
-      progress.participation_locked && !progress.active_match_id && !progress.all_done;
+      !demoMode &&
+      progress.participation_locked &&
+      !progress.active_match_id &&
+      !progress.all_done;
     return (
       <div className="page page-soft-in">
         <button className="backbtn" type="button" onClick={() => setStage("lobby")}>
@@ -515,10 +586,12 @@ export function GamesPage() {
         </button>
         <div className="section-head">
           <div>
-            <div className="eyebrow">STAG HUNT · PVP</div>
-            <h2>猎鹿博弈 · 真人匹配</h2>
+            <div className="eyebrow">{demoMode ? "STAG HUNT · DEMO" : "STAG HUNT · PVP"}</div>
+            <h2>{demoMode ? "猎鹿博弈 · 演示对局" : "猎鹿博弈 · 真人匹配"}</h2>
             <p>
-              你只会匹配一次真人对手，之后双方按顺序连续完成下面两个场景。整个正式实验结束后不能再次匹配或更换对手。
+              {demoMode
+                ? "对手为演示机器人：每轮随机偏向一侧约 60%，长期 A/B 近似均匀。可任意场景重复开局，数据不保存。"
+                : "你只会匹配一次真人对手，之后双方按顺序连续完成下面两个场景。整个正式实验结束后不能再次匹配或更换对手。"}
             </p>
           </div>
         </div>
@@ -526,15 +599,23 @@ export function GamesPage() {
           <div>
             <span>{progress.all_done ? "EXPERIMENT COMPLETE" : "REQUIRED PROGRESS"}</span>
             <b>
-              {progress.all_done
-                ? "你已完成唯一一次正式真人实验"
-                : cannotResume
-                  ? "该账号已经使用过真人实验资格，不能再次匹配"
-                  : progress.active_match_id
-                    ? `固定对手实验进行中：${progress.done_count} / ${progress.required_count} 个场景`
-                    : `待完成场景：${progress.done_count} / ${progress.required_count}`}
+              {demoMode
+                ? progress.all_done
+                  ? "演示场景均已玩过，仍可点任意场景重开"
+                  : `演示进度：${progress.done_count} / ${progress.required_count}`
+                : progress.all_done
+                  ? "你已完成唯一一次正式真人实验"
+                  : cannotResume
+                    ? "该账号已经使用过真人实验资格，不能再次匹配"
+                    : progress.active_match_id
+                      ? `固定对手实验进行中：${progress.done_count} / ${progress.required_count} 个场景`
+                      : `待完成场景：${progress.done_count} / ${progress.required_count}`}
             </b>
-            <small>一次匹配 · 同一对手 · 两个场景连续完成 · 不允许重复参加</small>
+            <small>
+              {demoMode
+                ? "演示模式 · 可重复 · 不写入正式库"
+                : "一次匹配 · 同一对手 · 两个场景连续完成 · 不允许重复参加"}
+            </small>
           </div>
           <strong>
             {progress.done_count}/{progress.required_count}
@@ -543,30 +624,36 @@ export function GamesPage() {
         <div className="scene-grid">
           {progress.scenes.map((s) => {
             const isFirstRequired = s.scene_key === firstRequiredScene?.scene_key;
-            const canEnter = isFirstRequired && !progress.all_done && !cannotResume;
+            const canEnter = demoMode
+              ? true
+              : isFirstRequired && !progress.all_done && !cannotResume;
             return (
             <article
               key={s.scene_key}
-              className={`scenario-card card ${s.completed || progress.all_done ? "completed" : ""}`}
+              className={`scenario-card card ${!demoMode && (s.completed || progress.all_done) ? "completed" : ""}`}
               data-no={s.no}
             >
               <span className="scenario-status">
-                {s.completed
-                  ? "✓ 已完成"
-                  : progress.all_done
-                    ? "✓ 实验已结束"
-                    : isFirstRequired
-                      ? progress.active_match_id
-                        ? "● 点击继续当前实验"
-                        : "① 从此场景开始"
-                      : "② 与同一对手自动进入"}
+                {demoMode
+                  ? s.completed
+                    ? "可重玩"
+                    : "可进入"
+                  : s.completed
+                    ? "✓ 已完成"
+                    : progress.all_done
+                      ? "✓ 实验已结束"
+                      : isFirstRequired
+                        ? progress.active_match_id
+                          ? "● 点击继续当前实验"
+                          : "① 从此场景开始"
+                        : "② 与同一对手自动进入"}
               </span>
               <h3>{s.title}</h3>
               <p>{s.short_desc}</p>
               <div className="scenario-meta">
                 <i>{progress.rounds_per_scene} 轮</i>
-                <i>真人同步</i>
-                <i>{s.completed ? `得分 ${s.best_score}` : "A / B"}</i>
+                <i>{demoMode ? "人机即时" : "真人同步"}</i>
+                <i>{s.completed && !demoMode ? `得分 ${s.best_score}` : "A / B"}</i>
               </div>
               <button
                 className="primary"
@@ -574,15 +661,19 @@ export function GamesPage() {
                 disabled={busy || !canEnter}
                 onClick={() => startPvp(s)}
               >
-                {progress.all_done
-                  ? "正式实验已完成"
-                  : cannotResume
-                    ? "真人实验资格已使用"
-                    : isFirstRequired
-                      ? progress.active_match_id
-                        ? "继续当前实验 →"
-                        : "开始唯一一次匹配 →"
-                      : "完成第一场景后自动进入"}
+                {demoMode
+                  ? s.completed
+                    ? "再次演示 →"
+                    : "开始演示 →"
+                  : progress.all_done
+                    ? "正式实验已完成"
+                    : cannotResume
+                      ? "真人实验资格已使用"
+                      : isFirstRequired
+                        ? progress.active_match_id
+                          ? "继续当前实验 →"
+                          : "开始唯一一次匹配 →"
+                        : "完成第一场景后自动进入"}
               </button>
             </article>
             );
@@ -658,32 +749,83 @@ export function GamesPage() {
 
   if (stage === "pvp" && scene && pvp) {
     if (pvp.status === "finished") {
+      const dims = finishPersonality
+        ? [
+            { name: "开放性", score: finishPersonality.o },
+            { name: "尽责性", score: finishPersonality.c },
+            { name: "外向性", score: finishPersonality.e },
+            { name: "宜人性", score: finishPersonality.a },
+            { name: "情绪敏感", score: finishPersonality.n },
+          ]
+        : [];
       return (
         <div className="page page-soft-in">
           <section className="finish card">
             <div className="trophy">✦</div>
             <div className="eyebrow" style={{ justifyContent: "center", marginTop: 20 }}>
-              真人匹配对局结束
+              {demoMode ? "演示对局结束" : "真人匹配对局结束"}
             </div>
             <h2>
               {scene.title} · vs {pvp.opponent_nickname || "对手"}
             </h2>
             <div className="finish-score">{pvp.my_score} 分</div>
             <p>对方得分：{pvp.opponent_score}</p>
-            <p>你已与同一位对手完成全部两个场景。本次正式实验机会已经使用，不能再次匹配或更换对手重做。</p>
-            <div className="finish-actions">
-              <button
-                className="primary"
-                type="button"
-                onClick={() => {
-                  setPvp(null);
-                  setStage("scenes");
-                }}
-              >
-                查看实验完成情况
-              </button>
-            </div>
+            <p>
+              {demoMode
+                ? "本局仅为演示，结果未写入正式库。可返回场景列表继续重玩。"
+                : "你已与同一位对手完成全部两个场景。本次正式实验机会已经使用，不能再次匹配或更换对手重做。"}
+            </p>
           </section>
+
+          <section className="finish-personality card">
+            <div className="eyebrow">人格反馈</div>
+            {finishPersonalityLoading ? (
+              <p className="finish-personality-loading">正在生成你的人格反馈…</p>
+            ) : finishPersonality ? (
+              <>
+                <h3>你的人格倾向</h3>
+                <p className="finish-personality-summary">{finishPersonality.summary_label}</p>
+                <p className="finish-personality-note">
+                  各维度得分为 1–5 分（由问卷题项换算）。结果用于解释博弈中的决策倾向，不代表能力高低。
+                </p>
+                <div className="finish-personality-grid">
+                  {dims.map((d) => {
+                    const pct = Math.max(0, Math.min(100, (d.score / 5) * 100));
+                    return (
+                      <article key={d.name} className="finish-personality-item">
+                        <div className="finish-personality-item-head">
+                          <b>{d.name}</b>
+                          <strong>{d.score.toFixed(1)}</strong>
+                        </div>
+                        <div className="finish-personality-bar" aria-hidden>
+                          <i style={{ width: `${pct}%` }} />
+                        </div>
+                        <small>{Math.round(pct)} 分（百分制参考）</small>
+                      </article>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <p className="finish-personality-loading">
+                人格反馈暂未解锁。请稍后再到「BFI-44 问卷」页查看；若仍看不到，请联系实验管理员。
+              </p>
+            )}
+          </section>
+
+          <div className="finish-actions" style={{ marginTop: 18 }}>
+            <button
+              className="primary"
+              type="button"
+              onClick={() => {
+                setPvp(null);
+                setFinishPersonality(null);
+                setStage("scenes");
+              }}
+            >
+              {demoMode ? "返回场景列表" : "查看实验完成情况"}
+            </button>
+          </div>
         </div>
       );
     }
@@ -699,13 +841,21 @@ export function GamesPage() {
         <section className={`round-card card ${urgent ? "round-urgent" : ""}`}>
           <div className="roundtop">
             <div>
-              <div className="eyebrow">真人对战 · {pvp.opponent_nickname || "对手"}</div>
+              <div className="eyebrow">
+                {demoMode ? "演示对战" : "真人对战"} · {pvp.opponent_nickname || "对手"}
+              </div>
               <h2>第 {pvp.current_round} 轮</h2>
               <p>
-                双方同步选择。超时未选本轮得 0 分
-                {pvp.opponent_has_chosen && !pvp.i_have_chosen ? "；对方已提交，正等你选择。" : "。"}
+                {demoMode
+                  ? "选择后立即结算。机器人每轮约 60% 偏向一侧，长期近似均匀。"
+                  : `双方同步选择。超时未选本轮得 0 分${
+                      pvp.opponent_has_chosen && !pvp.i_have_chosen
+                        ? "；对方已提交，正等你选择。"
+                        : "。"
+                    }`}
               </p>
             </div>
+            {!demoMode ? (
             <div
               className={`ring timer-ring ${urgent ? "urgent" : ""}`}
               style={{ ["--p" as string]: `${ringDeg}deg` }}
@@ -715,6 +865,12 @@ export function GamesPage() {
               <b>{secondsLeft}</b>
               <small>秒</small>
             </div>
+            ) : (
+              <div className="ring timer-ring" style={{ ["--p" as string]: "360deg" }}>
+                <b>∞</b>
+                <small>演示</small>
+              </div>
+            )}
           </div>
 
           <div
@@ -775,7 +931,7 @@ export function GamesPage() {
                 <button
                   className="choice-btn"
                   type="button"
-                  disabled={busy || secondsLeft <= 0}
+                  disabled={busy || (!demoMode && secondsLeft <= 0)}
                   onClick={() => playPvp("A")}
                 >
                   <b>A · {scene.option_a}</b>
@@ -784,7 +940,7 @@ export function GamesPage() {
                 <button
                   className="choice-btn"
                   type="button"
-                  disabled={busy || secondsLeft <= 0}
+                  disabled={busy || (!demoMode && secondsLeft <= 0)}
                   onClick={() => playPvp("B")}
                 >
                   <b>B · {scene.option_b}</b>

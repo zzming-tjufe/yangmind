@@ -7,19 +7,29 @@ import {
   patchScene,
   type AdminExperiment,
 } from "../api/admin";
+import { AdminListStatus } from "../components/AdminListStatus";
 import { useToast } from "../context/ToastContext";
 
 export function AdminExperimentsPage() {
   const { toast } = useToast();
   const [items, setItems] = useState<AdminExperiment[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    setItems(await getAdminExperiments());
+    setLoading(true);
+    try {
+      setItems(await getAdminExperiments());
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((e) => toast(e instanceof ApiError ? e.message : "加载失败"));
+    load().catch((e) => {
+      setLoading(false);
+      toast(e instanceof ApiError ? e.message : "加载失败");
+    });
   }, [toast]);
 
   async function run(fn: () => Promise<unknown>, okMsg: string) {
@@ -51,7 +61,12 @@ export function AdminExperimentsPage() {
           <span style={{ fontSize: 12, color: "#999" }}>使用箭头调整顺序</span>
         </div>
         <div className="manage-list">
-          {items.map((exp, i) => (
+          {loading ? (
+            <AdminListStatus loading />
+          ) : items.length === 0 ? (
+            <AdminListStatus empty emptyText="暂无实验" />
+          ) : (
+            items.map((exp, i) => (
             <div key={exp.id} className="manage-block">
               <div className="manage-item">
                 <i>{String(i + 1).padStart(2, "0")}</i>
@@ -115,8 +130,8 @@ export function AdminExperimentsPage() {
                 ))}
               </div>
             </div>
-          ))}
-          {items.length === 0 && <div className="manage-item">暂无实验</div>}
+            ))
+          )}
         </div>
       </section>
     </div>
