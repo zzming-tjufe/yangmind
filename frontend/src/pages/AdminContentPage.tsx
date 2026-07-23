@@ -4,9 +4,11 @@ import {
   createAdminAnnouncement,
   deleteAdminAnnouncement,
   getAdminAnnouncements,
+  getAdminAppVersion,
   getAdminContentBlocks,
   getAdminExperiments,
   patchAdminAnnouncement,
+  patchAdminAppVersion,
   patchAdminContentBlock,
   patchScene,
   type AdminAnnouncement,
@@ -65,18 +67,23 @@ export function AdminContentPage() {
   });
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [appVersion, setAppVersion] = useState("v0.4.1");
+  const [versionDraft, setVersionDraft] = useState("v0.4.1");
 
   async function load() {
     setLoading(true);
     try {
-      const [b, exps, anns] = await Promise.all([
+      const [b, exps, anns, ver] = await Promise.all([
         getAdminContentBlocks(),
         getAdminExperiments(),
         getAdminAnnouncements(),
+        getAdminAppVersion().catch(() => ({ version: "v0.4.1" })),
       ]);
       setBlocks(b);
       setScenes(exps.flatMap((e) => e.scenes));
       setAnnouncements(anns);
+      setAppVersion(ver.version);
+      setVersionDraft(ver.version);
     } finally {
       setLoading(false);
     }
@@ -214,15 +221,62 @@ export function AdminContentPage() {
     }
   }
 
+  async function saveAppVersion() {
+    const next = versionDraft.trim();
+    if (!next) {
+      toast("请输入版本号");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await patchAdminAppVersion(next);
+      setAppVersion(res.version);
+      setVersionDraft(res.version);
+      toast(`版本号已更新为 ${res.version}`);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const annModalOpen = creatingAnn || editAnn != null;
 
   return (
     <div className="page">
       <section className="hero card">
         <div>
-          <div className="eyebrow">CONTENT CMS</div>
+          <div className="eyebrow">内容管理</div>
           <h2>内容管理</h2>
           <p>发布测试通告与更新日志，并编辑问卷说明、大厅文案与博弈场景文案。</p>
+        </div>
+      </section>
+
+      <section className="card version-editor">
+        <div className="tablehead">
+          <div>
+            <h3>平台显示版本号</h3>
+            <small>当前：{appVersion} · 会出现在登录页等位置</small>
+          </div>
+        </div>
+        <div className="version-editor-row">
+          <label className="field" style={{ flex: 1, margin: 0 }}>
+            版本号
+            <input
+              value={versionDraft}
+              onChange={(e) => setVersionDraft(e.target.value)}
+              placeholder="例如 v0.4.1"
+              disabled={busy || loading}
+            />
+          </label>
+          <button
+            className="primary"
+            type="button"
+            disabled={busy || loading || versionDraft.trim() === appVersion}
+            onClick={() => saveAppVersion()}
+          >
+            保存版本号
+          </button>
         </div>
       </section>
 

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
+import { getPublicAppVersion } from "../api/admin";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 
@@ -23,6 +24,19 @@ export function AuthPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flipping, setFlipping] = useState(false);
+  const [appVersion, setAppVersion] = useState("v0.4.1");
+
+  useEffect(() => {
+    let cancelled = false;
+    getPublicAppVersion()
+      .then((v) => {
+        if (!cancelled) setAppVersion(v);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function switchMode(next: "login" | "register") {
     if (next === mode || flipping) return;
@@ -108,7 +122,7 @@ export function AuthPage() {
           
         </div>
         <div className="copyright auth-reveal" style={{ ["--d" as string]: "1180ms" }}>
-          © 2026 YangMind Lab · v0.3.0
+          © 2026 YangMind Lab · {appVersion}
         </div>
       </div>
       <div className="auth-panel">

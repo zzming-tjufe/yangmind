@@ -475,6 +475,29 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
   font-size: 12px;
   color: #6b5a2e;
 }
+.version-editor {
+  margin-bottom: 16px;
+  padding: 18px 22px 20px;
+}
+.version-editor .tablehead {
+  margin-bottom: 12px;
+}
+.version-editor .tablehead small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.version-editor-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.version-editor-row .primary {
+  height: 42px;
+  white-space: nowrap;
+}
 @media (max-width: 900px) {
   .export-grid {
     grid-template-columns: 1fr;
@@ -1492,6 +1515,53 @@ body::-webkit-scrollbar{width:0;height:0;display:none}
 }
 .sudo-view-switch button:hover:not(.active) {
   background: rgba(255, 255, 255, 0.55);
+}
+.sudo-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid #e0d6c6;
+  border-radius: 9px;
+  background: #fffdfa;
+  color: #8a5a10;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sudo-reset-btn:hover:not(:disabled) {
+  background: #fff1d6;
+}
+.sudo-reset-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.profile-meta {
+  min-width: 0;
+}
+.profile-name-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+.profile-name-row b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-version {
+  flex-shrink: 0;
+  margin-top: 1px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #f3efe6;
+  color: #8a5a10;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
 }
 .badge.debug {
   background: #fff1d6;

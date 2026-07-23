@@ -354,6 +354,29 @@ export function getSiteContent() {
   return api<SiteContent[]>("/api/v1/site/content");
 }
 
+/** 登录页等：无需登录 */
+export async function getPublicAppVersion(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/v1/site/app-version`);
+  if (!res.ok) return "v0.4.1";
+  try {
+    const data = (await res.json()) as { version?: string };
+    return data.version?.trim() || "v0.4.1";
+  } catch {
+    return "v0.4.1";
+  }
+}
+
+export function getAdminAppVersion() {
+  return api<{ version: string }>("/api/v1/admin/app-version");
+}
+
+export function patchAdminAppVersion(version: string) {
+  return api<{ version: string }>("/api/v1/admin/app-version", {
+    method: "PATCH",
+    json: { version },
+  });
+}
+
 export function getInviteCodes() {
   return api<InviteCode[]>("/api/v1/admin/invite-codes");
 }

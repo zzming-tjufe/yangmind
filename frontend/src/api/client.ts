@@ -92,7 +92,7 @@ export async function api<T>(
     });
   } catch {
     const hint = API_BASE
-      ? `无法连接 API（${API_BASE}），请检查网络或稍后重试`
+      ? `无法连接服务器（${API_BASE}），请检查网络或稍后重试`
       : "无法连接服务器，请稍后重试";
     throw new ApiError(0, hint);
   }

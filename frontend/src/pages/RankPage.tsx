@@ -32,7 +32,7 @@ export function RankPage() {
       <section className="hero card page-soft-in">
         <div>
           <div className="eyebrow">
-            {period === "weekly" ? "WEEKLY LEADERBOARD" : "ALL-TIME LEADERBOARD"}
+            {period === "weekly" ? "本周排行" : "总排行"}
           </div>
           <h2>{hero?.title || "合作不只是策略，也是成绩"}</h2>
           <p>

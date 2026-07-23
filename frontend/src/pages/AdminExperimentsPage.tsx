@@ -49,7 +49,7 @@ export function AdminExperimentsPage() {
     <div className="page">
       <section className="hero card">
         <div>
-          <div className="eyebrow">EXPERIMENT OPERATIONS</div>
+          <div className="eyebrow">实验运营</div>
           <h2>管理博弈实验</h2>
           <p>调整开放状态、轮次，以及各场景是否启用。关闭实验后参与者将无法开新局。</p>
         </div>

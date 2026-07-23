@@ -47,7 +47,7 @@ export function NoticesPage() {
     <div className="page">
       <section className="hero card">
         <div>
-          <div className="eyebrow">NOTICES & CHANGELOG</div>
+          <div className="eyebrow">公告与更新</div>
           <h2>公告栏</h2>
           <p>查看测试相关通告与平台更新日志。置顶条目会优先显示。</p>
         </div>

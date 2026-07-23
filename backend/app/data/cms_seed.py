@@ -56,11 +56,16 @@ DEFAULT_CONTENT_BLOCKS = [
     {
         "block_key": "rank.hero",
         "title": "合作不只是策略，也是成绩",
-        "body": "排行榜综合累计得分、有效场次与人格摘要（来自真实后端数据）。",
+        "body": "排行榜综合累计得分、有效场次与人格摘要。",
     },
     {
         "block_key": "announcement.banner",
         "title": "平台公告",
         "body": "",
+    },
+    {
+        "block_key": "lab.app_version",
+        "title": "平台显示版本号",
+        "body": "v0.4.1",
     },
 ]

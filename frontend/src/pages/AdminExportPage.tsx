@@ -21,7 +21,8 @@ const CARDS: ExportCard[] = [
     summary: "每位参与者一行：账号信息、问卷完成与质量状态、大五人格得分与摘要、博弈场次与总分。",
     details: [
       "适合做被试名单与总体描述统计",
-      "CSV 为中文表头；JSON 为原始字段结构",
+      "表格文件为中文表头，方便用 Excel 打开",
+      "原始数据文件保留完整结构，方便进一步分析",
     ],
   },
   {
@@ -42,8 +43,8 @@ const CARDS: ExportCard[] = [
     defaultName: "survey_quality",
     summary: "每位答卷一行：是否通过、注意力题、自报认真程度、时长、失焦、硬排除与软标记、管理员复核。",
     details: [
-      "CSV 已把质量指标拆成可读中文列",
-      "JSON 保留 quality_flags 等原始嵌套结构",
+      "表格文件已把质量指标拆成可读中文列",
+      "原始数据文件保留完整质量标记结构",
     ],
   },
   {
@@ -93,7 +94,7 @@ export function AdminExportPage() {
         <div className="eyebrow">研究数据导出</div>
         <h2>按数据层级下载分析文件</h2>
         <p>
-          共四个导出块。点某一块后选择 CSV（中文可读）或 JSON（原始结构）。浏览器会弹出下载 /
+          共四个导出块。点某一块后选择表格文件（中文可读）或原始数据文件。浏览器会弹出下载 /
           另存为，无法指定服务器上的文件夹。
         </p>
       </section>
@@ -144,7 +145,7 @@ export function AdminExportPage() {
                     checked={format === "csv"}
                     onChange={() => setFormat("csv")}
                   />
-                  CSV（中文表头，适合 Excel）
+                  表格文件 CSV（中文表头，适合 Excel）
                 </label>
                 <label>
                   <input
@@ -153,7 +154,7 @@ export function AdminExportPage() {
                     checked={format === "json"}
                     onChange={() => setFormat("json")}
                   />
-                  JSON（原始结构，适合脚本）
+                  原始数据 JSON（完整结构）
                 </label>
               </fieldset>
               <label className="field">

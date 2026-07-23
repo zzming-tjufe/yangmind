@@ -427,7 +427,7 @@ export function GamesPage() {
         )}
         <div className="section-head">
           <div>
-            <div className="eyebrow">EXPERIMENT LOBBY</div>
+            <div className="eyebrow">实验大厅</div>
             <h2>{lobby?.title || "选择一种博弈"}</h2>
             <p>{lobby?.body || "观察在不同收益结构下，你如何建立信任、权衡风险。"}</p>
           </div>
@@ -435,7 +435,7 @@ export function GamesPage() {
         <div className="games">
           <article className={`game card ${progress?.unlock_games ? "" : "locked"}`}>
             <div className="art prison">
-              <span>01 · PRISONER</span>
+              <span>01 · 囚徒困境</span>
               <div className="bars">
                 {Array.from({ length: 5 }, (_, i) => (
                   <i key={i} />
@@ -457,7 +457,7 @@ export function GamesPage() {
           </article>
           <article className={`game card ${progress?.unlock_games ? "" : "locked"}`}>
             <div className="art stag">
-              <span>02 · STAG HUNT</span>
+              <span>02 · 猎鹿博弈</span>
               <div className="forest" />
             </div>
             <div className="gamebody">
@@ -509,7 +509,7 @@ export function GamesPage() {
         </button>
         <section className="hero card">
           <div>
-            <div className="eyebrow">COMPREHENSION CHECK</div>
+            <div className="eyebrow">规则理解检查</div>
             <h2>猎鹿博弈规则理解检查</h2>
             <p>全部答对后才能进入真人匹配。答错可以复习规则后再次检查，不影响人格问卷。</p>
           </div>
@@ -586,7 +586,7 @@ export function GamesPage() {
         </button>
         <div className="section-head">
           <div>
-            <div className="eyebrow">{demoMode ? "STAG HUNT · DEMO" : "STAG HUNT · PVP"}</div>
+            <div className="eyebrow">{demoMode ? "猎鹿博弈 · 演示" : "猎鹿博弈 · 真人匹配"}</div>
             <h2>{demoMode ? "猎鹿博弈 · 演示对局" : "猎鹿博弈 · 真人匹配"}</h2>
             <p>
               {demoMode
@@ -597,7 +597,7 @@ export function GamesPage() {
         </div>
         <div className={`completion-banner card ${progress.all_done ? "complete" : ""}`}>
           <div>
-            <span>{progress.all_done ? "EXPERIMENT COMPLETE" : "REQUIRED PROGRESS"}</span>
+            <span>{progress.all_done ? "实验已完成" : "必做进度"}</span>
             <b>
               {demoMode
                 ? progress.all_done
@@ -613,7 +613,7 @@ export function GamesPage() {
             </b>
             <small>
               {demoMode
-                ? "演示模式 · 可重复 · 不写入正式库"
+                ? "演示模式 · 可重复 · 不写入正式实验数据"
                 : "一次匹配 · 同一对手 · 两个场景连续完成 · 不允许重复参加"}
             </small>
           </div>
@@ -689,7 +689,7 @@ export function GamesPage() {
       <div className="page page-soft-in">
         <section className="hero card matchmaking-hero">
           <div>
-            <div className="eyebrow">MATCHMAKING</div>
+            <div className="eyebrow">正在匹配</div>
             <h2>
               正在匹配真人对手
               <span className="match-dots" aria-hidden>
@@ -733,7 +733,7 @@ export function GamesPage() {
       <div className="page page-soft-in">
         <section className="hero card match-found-hero">
           <div>
-            <div className="eyebrow">MATCH FOUND</div>
+            <div className="eyebrow">匹配成功</div>
             <h2>匹配成功</h2>
             <p>
               对手 <b>{pvp.opponent_nickname || "参与者"}</b> 已就位，即将开始第 1 轮…
@@ -772,7 +772,7 @@ export function GamesPage() {
             <p>对方得分：{pvp.opponent_score}</p>
             <p>
               {demoMode
-                ? "本局仅为演示，结果未写入正式库。可返回场景列表继续重玩。"
+                ? "本局仅为演示，结果未写入正式实验数据。可返回场景列表继续重玩。"
                 : "你已与同一位对手完成全部两个场景。本次正式实验机会已经使用，不能再次匹配或更换对手重做。"}
             </p>
           </section>

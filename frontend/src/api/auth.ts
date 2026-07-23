@@ -40,3 +40,11 @@ export function changePassword(body: { current_password: string; new_password: s
     json: body,
   });
 }
+
+/** 仅 sudo：清空本人问卷 / 理解检查 / 对局进度 */
+export function sudoResetProgress() {
+  return api<{ ok: boolean; deleted: Record<string, number> }>(
+    "/api/v1/auth/sudo-reset-progress",
+    { method: "POST" },
+  );
+}

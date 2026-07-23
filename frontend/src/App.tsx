@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState } from "react";
 import { ApiError } from "./api/client";
+import * as authApi from "./api/auth";
 import { AppShell, type View } from "./components/AppShell";
 import { useAuth } from "./context/AuthContext";
 import { useDemo } from "./context/DemoContext";
@@ -56,6 +57,7 @@ export default function App() {
   const { toast } = useToast();
   const [view, setView] = useState<View>("bfi");
   const [demoEpoch, setDemoEpoch] = useState(0);
+  const [sudoResetBusy, setSudoResetBusy] = useState(false);
 
   useLayoutEffect(() => {
     if (!user) {
@@ -77,7 +79,7 @@ export default function App() {
     try {
       await enterDemo();
       setView("bfi");
-      toast("已进入演示模式：操作完整可交互，数据不写入正式库");
+      toast("已进入演示模式：操作完整可交互，数据不写入正式实验");
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "进入演示模式失败");
     }
@@ -105,6 +107,25 @@ export default function App() {
           ? "已切换到子管界面"
           : "已切换到参与者界面",
     );
+  }
+
+  async function onSudoResetProgress() {
+    if (!isSudoUser) return;
+    const ok = window.confirm(
+      "将重置所有状态\n\n会清空当前调试账号的问卷、理解检查与博弈对局进度，回到一开始未作答、未匹配的状态。\n\n此操作不可撤销，确定继续？",
+    );
+    if (!ok) return;
+    setSudoResetBusy(true);
+    try {
+      await authApi.sudoResetProgress();
+      setDemoEpoch((n) => n + 1);
+      setView(homeViewFor(viewAs));
+      toast("已重置：问卷与对局进度已清空");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "重置失败");
+    } finally {
+      setSudoResetBusy(false);
+    }
   }
 
   if (loading) {
@@ -189,6 +210,8 @@ export default function App() {
       onResetDemo={demoMode ? onResetDemo : undefined}
       sudoViewAs={isSudoUser ? viewAs : undefined}
       onSudoViewChange={isSudoUser ? onSudoViewChange : undefined}
+      onSudoResetProgress={isSudoUser ? onSudoResetProgress : undefined}
+      sudoResetBusy={sudoResetBusy}
       effectiveRole={effectiveRole}
     >
       <div

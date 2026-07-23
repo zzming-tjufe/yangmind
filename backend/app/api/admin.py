@@ -43,6 +43,11 @@ from app.services.rbac_scope import (
     participant_query_for_staff,
 )
 from app.services.admin_export import export_dataset
+from app.services.app_version import (
+    APP_VERSION_BLOCK_KEY,
+    get_app_display_version,
+    set_app_display_version,
+)
 from app.services.stats import (
     admin_overview_stats,
     latest_personality,
@@ -830,7 +835,41 @@ def admin_list_content(db: Session = Depends(get_db), _: User = Depends(get_curr
             updated_at=r.updated_at,
         )
         for r in rows
+        if r.block_key != APP_VERSION_BLOCK_KEY
     ]
+
+
+class AppVersionOut(BaseModel):
+    version: str
+
+
+class AppVersionPatch(BaseModel):
+    version: str = Field(min_length=1, max_length=32)
+
+
+@router.get("/app-version", response_model=AppVersionOut)
+def admin_get_app_version(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_super_admin),
+):
+    return AppVersionOut(version=get_app_display_version(db))
+
+
+@router.patch("/app-version", response_model=AppVersionOut)
+def admin_patch_app_version(
+    body: AppVersionPatch,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_super_admin),
+):
+    version = set_app_display_version(db, body.version)
+    _log_event(
+        db,
+        event_type="admin_update_app_version",
+        detail=f"将平台显示版本号更新为 {version}",
+        actor_id=admin.id,
+    )
+    db.commit()
+    return AppVersionOut(version=version)
 
 
 @router.patch("/content-blocks/{block_id}", response_model=ContentAdminOut)

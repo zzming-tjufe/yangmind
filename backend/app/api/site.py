@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.roles import is_super_admin
 from app.models.cms import Announcement, ContentBlock, PageConfig
 from app.models.user import User
+from app.services.app_version import get_app_display_version
 
 router = APIRouter(prefix="/api/v1/site", tags=["site"])
 
@@ -36,6 +37,16 @@ class AnnouncementOut(BaseModel):
     pinned: bool
     published_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class AppVersionOut(BaseModel):
+    version: str
+
+
+@router.get("/app-version", response_model=AppVersionOut)
+def public_app_version(db: Session = Depends(get_db)):
+    """登录页等无需登录即可读取的展示版本号。"""
+    return AppVersionOut(version=get_app_display_version(db))
 
 
 @router.get("/pages", response_model=list[PageOut])

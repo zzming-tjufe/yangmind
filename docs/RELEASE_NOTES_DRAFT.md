@@ -1,100 +1,39 @@
-# YangMind 更新日志草稿（未上线）
+# YangMind 更新说明（未上线 · 给协作同学）
 
-> 范围：相对 `v0.3.x` / 质量控制基线，本轮本地已实现内容（含已提交 `v0.4.0前瞻` 与其后未推送的导出重构）。  
-> 面向开发 / 部署核对；对外公告需另写短文案。
+> 本地已实现，待部署后对外正式发公告时可再压缩文案。
 
----
+## 登录与账号
+- 可以用邮箱或昵称登录
+- 注册时昵称不能重复
+- 新增调试账号「sudo」：权限高于总管，可在总管 / 子管 / 参与者界面之间切换，方便自测；相关数据会标记为调试，不混进正式统计
+- sudo 顶栏提供「重置进度」：确认后清空本人问卷、理解检查与对局，回到未开始状态（仅 sudo 可见）
 
-## 后端
+## 管理端体验与性能
+- 侧栏重新分组，菜单文案更直白，图标更清晰
+- 「操作记录」单独成页
+- **参与者数据页加载优化**：列表改为批量查询，不再逐个用户慢拉；统计与列表并行请求，首屏更快
+- **切页与列表加载状态**：各管理页切换时显示明确转圈，避免「暂无」一闪而过或干等空白
+- 空列表改为全宽提示，不再挤在左侧小框
+- 弹窗遮罩覆盖整页（含侧栏）；页面切换动画改为更轻的淡入，减少卡顿与遮罩异常
 
-### Auth / 用户模型
-- `POST /api/v1/auth/login`：登录标识支持邮箱或昵称（`LoginRequest.email` 改为普通 `str`，查找逻辑归一化）。
-- 注册昵称唯一：大小写不敏感；`db_fixes` 启动时处理历史重名并补唯一索引。
-- `User` 增加 `is_debug`；`role` 扩展 `sudo`（高于 `super_admin`）。
-- `UserOut` / Token 响应增加 `is_debug`、`is_sudo`。
-- **已知坑**：`UserOut.email` 使用 `EmailStr`，`*.local` 邮箱会在登录序列化阶段 500；sudo 默认邮箱需用合法域名（如 `sudo@yangmind.cn`）。
+## 演示模式
+- 总管、子管可进入完整演示（问卷 + 博弈）
+- 演示数据不写入正式库，可一键重置
 
-### sudo 调试账号
-- 配置项（`config.py` / `.env`）：`ENABLE_SUDO`、`SUDO_PASSWORD`、`SUDO_NICKNAME`、`SUDO_EMAIL`。
-- 生产：`ENABLE_SUDO=true` 时必须设 `SUDO_PASSWORD`，否则拒绝启动。
-- `seed_sudo_if_needed`：启动时创建/同步 sudo 用户（`role=sudo`、`is_debug=true`）。
-- RBAC：`is_sudo` 可走总管接口；邀请码可打 `is_debug`；注册继承调试标记。
-- 统计 / 排行榜 / 导出：非 sudo 默认排除 `is_debug`；sudo 导出带调试行与 `is_debug` 列。
+## 问卷与博弈
+- BFI 答题页改为更紧凑的作答布局，桌面端有进度导航
+- 两场真人博弈全部结束后，结束页会直接展示人格倾向与各维得分（仍按原规则：做完实验才解锁反馈）
 
-### 演示模式（内存）
-- 新路由前缀 `/api/v1/demo/*`（`demo.py` + `demo_store.py`）。
-- 问卷草稿/提交、猎鹿场景、人机对局均走内存态；`POST /demo/reset` 清空。
-- Bot 选择偏置约 60% 一侧；不落正式库、不进导出。
-
-### 管理端与数据层
-- 参与者列表：批量聚合问卷状态 / 博弈统计 / 人格，减少 N+1。
-- 质量复核、授权重做、邀请码/子管、审计事件等既有能力保留；审计页独立。
-- `users.is_debug`、`invite_codes.is_debug` 启动迁移（`db_fixes`）。
-
-### 研究数据导出（相对旧三入口重写，工作区未提交部分）
-- 新模块：`app/services/admin_export.py`。
-- 统一入口：`GET /api/v1/admin/export/{kind}?format=csv|json&filename=`  
-  - `users`：一人一行（完成状态、质量状态、E/A/C/N/O、摘要、场次、总分等）。  
-  - `survey-answers`：一人一行宽表，`题1`…`题44`；含重做前归档。  
-  - `survey-quality`：一人一行质量指标（拆列，中文表头）；JSON 保留嵌套 `quality_flags` 等。  
-  - `runs`：一人一轮（场景、对局/轮次、双方选择与分、决策 ms、超时、双方问卷质量与理解测试、`analysis_eligible` 等）。
-- CSV：UTF-8 BOM + 中文表头 + 布尔「是/否」；JSON：原始英文字段结构。
-- 旧 `export/users.csv|surveys.csv|rounds.csv` 路径已从 `admin.py` 移除，改走上述 `kind`。
-
-### 其它后端触点
-- `game_engine` / 进度解锁：人格反馈仍依赖必做场景全部完成（`personality_feedback_unlocked`）。
-- 问卷质量规则本身（`bfi_scoring.check_quality` v2026-07-v2）本轮未改判定阈值，仅导出与展示侧消费。
+## 研究数据导出
+- 管理端新增独立「导出」页，一次看清四类数据
+- **用户层**：每位参与者一行（资料、问卷状态、质量状态、人格得分、博弈场次与总分）
+- **问卷答卷**：与质量分开；每人一行，横向列出 44 题作答
+- **问卷质量**：单独一份，方便看是否通过、复核等信息
+- **博弈轮次**：每人每轮一行（场景、双方选择、得分、用时、超时、双方问卷质量与理解测试等）
+- 每类都可选择导出 CSV（中文、可读）或 JSON（给分析脚本用），并可自定义文件名
+- 导出弹层已修复：在弹层内编辑文件名时不会误关闭
+- 平台显示版本号默认 **v0.4.1**；总管可在「文案与公告」页直接查看并修改（登录页同步显示）
 
 ---
 
-## 前端
-
-### 壳层 / 路由 / 权限 UI
-- 管理侧栏分组：实验运营 / 拉人与协作 / 站点配置 / 系统 / 账号；Lucide 图标。
-- 「操作记录」独立 view=`audit`；「导出」独立 view=`export`（仅总管/sudo）。
-- `ModalPortal`：管理模态挂 `body`，遮罩盖侧栏+顶栏。
-- `SudoViewContext`：sudo 顶栏「总管 | 子管 | 参与者」切换 `effectiveRole`。
-- `DemoContext`：演示进出/重置；演示态走 `/api/v1/demo/*`。
-
-### 参与端
-- 登录页：占位/校验改为账号（邮箱或昵称）。
-- BFI：紧凑顶栏 + 量表矩阵 + 桌面右侧进度栏；提交后人格仍延迟解锁。
-- 博弈结束页（无 successor 的 `finished`）：拉取 `my-response`，展示 `summary_label` 与五维分。
-
-### 管理端页面
-- `AdminUsersPage`：批量加载、质量复核弹层、去掉页内导出条。
-- `AdminExportPage`：四块说明 + 模态选 CSV/JSON 与文件名（下载位置由浏览器决定）。
-- 若干列表页：`AdminListStatus` 加载态；空列表全宽提示。
-
-### 依赖
-- 前端增加 `lucide-react`。
-
----
-
-## 运维 / 配置
-
-- 生产 `.env` 示例补充 sudo 变量；启用后需 `systemctl restart yangmind-api` 以 seed。
-- 前端构建仍建议：`VITE_API_BASE=` + Nginx `:8081` 反代 `/api` → `8003`。
-- 部署本轮导出改动需同时更新 backend（含 `admin_export.py`）与 frontend `dist`。
-
----
-
-## 文件索引（便于 code review）
-
-| 区域 | 主要路径 |
-|------|----------|
-| sudo / 角色 | `core/config.py`, `core/roles.py`, `services/seed.py`, `models/user.py` |
-| 演示 | `api/demo.py`, `services/demo_store.py` |
-| 导出 | `services/admin_export.py`, `api/admin.py`（export 段） |
-| 登录 | `api/auth.py`, `schemas/auth.py` |
-| 迁移 | `services/db_fixes.py` |
-| 壳 / 导出页 | `AppShell.tsx`, `AdminExportPage.tsx`, `SudoViewContext.tsx`, `DemoContext.tsx` |
-| BFI / 结束页 | `BfiPage.tsx`, `GamesPage.tsx` |
-
----
-
-## 未包含 / 待确认
-
-- 正式发版公告文案（本文件偏工程 changelog）。
-- 导出块是否再增减、字段是否与分析同学最终表头逐字对齐（当前按约定草案实现）。
-- `UserOut` 对调试邮箱的 `EmailStr` 放宽（可用改邮箱规避，代码层尚未改）。
+以上内容已在本地实现，**尚未正式部署上线**。

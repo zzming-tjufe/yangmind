@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeftRight,
@@ -12,11 +12,13 @@ import {
   LogOut,
   Megaphone,
   MonitorPlay,
+  RotateCcw,
   Trophy,
   User,
   UserCog,
   Users,
 } from "lucide-react";
+import { getPublicAppVersion } from "../api/admin";
 import { useAuth } from "../context/AuthContext";
 import { useSitePages } from "../hooks/useSite";
 import { isStaff, isSubAdmin, isSuperAdmin, type SudoViewAs } from "../lib/roles";
@@ -121,6 +123,9 @@ type Props = {
   /** sudo 专用：当前视角；有值才显示切换器 */
   sudoViewAs?: SudoViewAs;
   onSudoViewChange?: (v: SudoViewAs) => void;
+  /** 仅 sudo：重置本人实验进度 */
+  onSudoResetProgress?: () => void;
+  sudoResetBusy?: boolean;
   /** 侧栏按此角色渲染（sudo 可切换） */
   effectiveRole?: string;
   children: ReactNode;
@@ -140,6 +145,8 @@ export function AppShell({
   onResetDemo,
   sudoViewAs,
   onSudoViewChange,
+  onSudoResetProgress,
+  sudoResetBusy = false,
   effectiveRole,
   children,
 }: Props) {
@@ -150,6 +157,19 @@ export function AppShell({
   const staff = isStaff(role);
   const showParticipantUi = !staff || demoMode;
   const { byKey, pages } = useSitePages();
+  const [appVersion, setAppVersion] = useState("v0.4.1");
+
+  useEffect(() => {
+    let cancelled = false;
+    getPublicAppVersion()
+      .then((v) => {
+        if (!cancelled) setAppVersion(v);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const staffGroups = superAdmin ? superAdminNavGroups : subAdmin ? subAdminNavGroups : [];
   const participantItems = userNavBase.filter((item) => {
@@ -177,7 +197,7 @@ export function AppShell({
         ? fallbackTitle
         : pageCfg?.title || fallbackTitle;
   const sub = demoMode
-    ? "演示模式 · 操作可完整交互，数据不写入正式库"
+    ? "演示模式 · 操作可完整交互，数据不写入正式实验"
     : showParticipantUi
       ? pageCfg?.subtitle || fallbackSub
       : fallbackSub;
@@ -296,8 +316,13 @@ export function AppShell({
           <div className="avatar" id="avatar">
             {(user?.nickname || "?").slice(0, 1)}
           </div>
-          <div>
-            <b id="profile-name">{user?.nickname}</b>
+          <div className="profile-meta">
+            <div className="profile-name-row">
+              <b id="profile-name">{user?.nickname}</b>
+              <span className="profile-version" title="平台版本">
+                {appVersion}
+              </span>
+            </div>
             <small id="profile-id">
               {staff ? user?.email : `ID · ${user?.public_id}`}
             </small>
@@ -337,6 +362,18 @@ export function AppShell({
                   </button>
                 ))}
               </div>
+            ) : null}
+            {onSudoResetProgress ? (
+              <button
+                className="sudo-reset-btn"
+                type="button"
+                disabled={sudoResetBusy}
+                onClick={onSudoResetProgress}
+                title="清空本人问卷与对局进度"
+              >
+                <RotateCcw size={14} strokeWidth={2} aria-hidden />
+                {sudoResetBusy ? "重置中…" : "重置进度"}
+              </button>
             ) : null}
             {!demoMode ? <AnnouncementBell /> : null}
             {demoMode ? (

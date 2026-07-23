@@ -14,6 +14,7 @@ from app.core.roles import (
     INVITE_KINDS,
     ROLE_PARTICIPANT,
     ROLE_SUB,
+    is_sudo,
 )
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.admin_extra import AccountEvent, InviteCode
@@ -25,6 +26,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserOut,
 )
+from app.services.sudo_reset import reset_sudo_progress
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -225,3 +227,24 @@ def change_password(
     )
     db.commit()
     return {"ok": True}
+
+
+@router.post("/sudo-reset-progress")
+def sudo_reset_progress(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """仅 sudo：清空本人问卷、理解检查与对局进度，便于反复走参与者流程。"""
+    if not is_sudo(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅调试账号 sudo 可用")
+    deleted = reset_sudo_progress(db, current_user)
+    db.add(
+        AccountEvent(
+            user_id=current_user.id,
+            actor_id=current_user.id,
+            event_type="sudo_reset_progress",
+            detail="sudo 重置本人实验进度（问卷/理解检查/对局）",
+        )
+    )
+    db.commit()
+    return {"ok": True, "deleted": deleted}

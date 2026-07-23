@@ -36,7 +36,7 @@ export function AdminAuditPage() {
         <article className="setting card">
           <i>录</i>
           <h3>这是什么</h3>
-          <p>后台里创建邀请码、分配、启停等操作会记在这里，方便事后核对，不是登录日志。</p>
+          <p>创建邀请码、分配、启停等操作会记在这里，方便事后核对，不是登录记录。</p>
         </article>
       </div>
 

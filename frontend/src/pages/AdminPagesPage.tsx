@@ -78,7 +78,7 @@ export function AdminPagesPage() {
     <div className="page">
       <section className="hero card">
         <div>
-          <div className="eyebrow">PAGE CONFIG</div>
+          <div className="eyebrow">页面设置</div>
           <h2>页面管理</h2>
           <p>
             控制参与端页面的顶栏标题、副标题与发布状态。隐藏或草稿页面对普通参与者不可见。

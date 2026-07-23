@@ -22,7 +22,7 @@ from app.services.seed import seed_all
 app = FastAPI(
     title="YangMind Lab API",
     description="人格与合作博弈实验平台 · 后端",
-    version="0.1.0",
+    version="0.4.1",
 )
 
 # 允许前端跨域访问 API（本地 + 公网域名，见 CORS_ORIGINS）
@@ -72,7 +72,18 @@ app.include_router(demo_router)
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "yangmind-api", "version": "0.1.0"}
+    db = SessionLocal()
+    try:
+        from app.services.app_version import get_app_display_version
+
+        display = get_app_display_version(db)
+        db.commit()
+    except Exception:
+        display = "v0.4.1"
+        db.rollback()
+    finally:
+        db.close()
+    return {"ok": True, "service": "yangmind-api", "version": display}
 
 
 @app.get("/")

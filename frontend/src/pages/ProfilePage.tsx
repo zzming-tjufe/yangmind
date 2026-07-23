@@ -52,7 +52,7 @@ export function ProfilePage() {
     <div className="page">
       <section className="hero card">
         <div>
-          <div className="eyebrow">ACCOUNT</div>
+          <div className="eyebrow">我的账号</div>
           <h2>我的账号</h2>
           <p>查看基本信息，并在需要时自行修改登录密码。</p>
         </div>
